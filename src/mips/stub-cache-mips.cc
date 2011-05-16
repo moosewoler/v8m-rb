@@ -2525,7 +2525,11 @@ MaybeObject* CallStubCompiler::CompileCallGlobal(JSObject* object,
   Handle<Code> code(function->code());
   ParameterCount expected(function->shared()->formal_parameter_count());
   if (V8::UseCrankshaft()) {
-    UNIMPLEMENTED_MIPS();
+    // TODO(kasperl): For now, we always call indirectly through the
+    // code field in the function to allow recompilation to take effect
+    // without changing any of the call sites.
+    __ lw(a3, FieldMemOperand(a1, JSFunction::kCodeEntryOffset));
+    __ InvokeCode(a3, expected, arguments(), JUMP_FUNCTION);
   } else {
     __ InvokeCode(code, expected, arguments(),
                   RelocInfo::CODE_TARGET, JUMP_FUNCTION);
