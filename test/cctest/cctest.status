@@ -94,7 +94,6 @@ test-accessors: SKIP
 test-strings: SKIP
 test-ast: SKIP
 test-bignum: SKIP
-test-compiler: SKIP
 test-decls: SKIP
 test-disasm-mips: SKIP
 test-regexp: SKIP
