@@ -1771,7 +1771,7 @@ void MacroAssembler::Call(const Operand& target, BranchDelaySlot bdslot) {
   if (target.is_reg()) {
       jalr(target.rm());
   } else {  // !target.is_reg().
-    if (!MustUseReg(target.rmode_)) {
+    if (!MustUseReg(target.rmode_) && is_uint28(target.imm32_)) {
       jal(target.imm32_);
     } else {  // MustUseReg(target).
       // Must record previous source positions before the
