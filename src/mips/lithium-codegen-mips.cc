@@ -2188,12 +2188,118 @@ class DeferredTaggedToI: public LDeferredCode {
 
 
 void LCodeGen::DoDeferredTaggedToI(LTaggedToI* instr) {
-  Abort("Unimplemented: %s (line %d)", __func__, __LINE__);
+  Register input_reg = ToRegister(instr->InputAt(0));
+  Register scratch1 = scratch0();
+  Register scratch2 = ToRegister(instr->TempAt(0));
+  FPURegister double_scratch = double_scratch0();
+  FPURegister single_scratch = double_scratch.low();
+
+  ASSERT(!scratch1.is(input_reg) && !scratch1.is(scratch2));
+  ASSERT(!scratch2.is(input_reg) && !scratch2.is(scratch1));
+
+  Label done;
+
+  // The input is a tagged HeapObject.
+  // Heap number map check.
+  __ lw(scratch1, FieldMemOperand(input_reg, HeapObject::kMapOffset));
+  __ LoadRoot(at, Heap::kHeapNumberMapRootIndex);
+  // __ cmp(scratch1, Operand(ip)); ...................................................plind
+
+  if (instr->truncating()) {
+    Register scratch3 = ToRegister(instr->TempAt(1));
+    FPURegister double_scratch2 = ToDoubleRegister(instr->TempAt(2));
+    ASSERT(!scratch3.is(input_reg) &&
+           !scratch3.is(scratch1) &&
+           !scratch3.is(scratch2));
+    // Performs a truncating conversion of a floating point number as used by
+    // the JS bitwise operations.
+    Label heap_number;
+    __ Branch(&heap_number, eq, scratch1, Operand(at));  // HeapNumber map?
+    // Check for undefined. Undefined is converted to zero for truncating
+    // conversions.
+    __ LoadRoot(at, Heap::kUndefinedValueRootIndex);
+    // __ cmp(input_reg, Operand(ip));  // ............................................plind
+    DeoptimizeIf(ne, instr->environment(), input_reg, Operand(at));
+    __ mov(input_reg, zero_reg);  // TODO(plind): result really in input reg ???????
+    __ b(&done);
+
+    __ bind(&heap_number);
+    // __ sub(scratch1, input_reg, Operand(kHeapObjectTag));
+    // __ vldr(double_scratch2, scratch1, HeapNumber::kValueOffset); .....................plind
+    __ ldc1(double_scratch2,
+            FieldMemOperand(input_reg, HeapNumber::kValueOffset));
+    __ EmitECMATruncate(input_reg,
+                        double_scratch2,
+                        single_scratch,
+                        scratch1,
+                        scratch2,
+                        scratch3);
+
+  } else {
+    // TODO(plind): if this scope is needed, then we also need one above ... top-level scope?
+    CpuFeatures::Scope scope(FPU);
+
+    // Deoptimize if we don't have a heap number.
+    DeoptimizeIf(ne, instr->environment(), scratch1, Operand(at));
+
+    // Load the double value.
+    __ ldc1(double_scratch,
+            FieldMemOperand(input_reg, HeapNumber::kValueOffset));
+
+    // TODO(plind): ARM uses a MacroAssembler function here (EmitVFPTruncate).
+    // On MIPS a lot of things cannot be implemented the same way so right
+    // now it makes a lot more sense to just do things manually.
+
+    // Save FCSR.
+    __ cfc1(scratch1, FCSR);
+    // Disable FPU exceptions.
+    __ ctc1(zero_reg, FCSR);
+    // TODO(plind): it appears this instuction rounds towards zero regardless
+    // of the rounding mode in FCSR. Verify, fix if needed, and remove comment.
+    __ trunc_w_d(single_scratch, double_scratch);
+    // Retrieve FCSR.
+    __ cfc1(scratch2, FCSR);
+    // Restore FCSR.
+    __ ctc1(scratch1, FCSR);
+
+    // Check for inexact conversion or exception (non-zero flags).
+    __ And(scratch2, scratch2, kFCSRFlagMask);
+
+    // Deopt if the operation did not succeed.
+    DeoptimizeIf(ne, instr->environment(), scratch2, Operand(zero_reg));
+
+    // Load the result.
+    __ mfc1(input_reg, single_scratch);
+
+    if (instr->hydrogen()->CheckFlag(HValue::kBailoutOnMinusZero)) {
+      // __ cmp(input_reg, Operand(0));
+      // __ b(ne, &done);
+      __ Branch(&done, ne, input_reg, Operand(zero_reg));
+
+      __ mfc1(scratch1, double_scratch.high());
+      __ And(scratch1, scratch1, Operand(HeapNumber::kSignMask));
+      DeoptimizeIf(ne, instr->environment(), scratch1, Operand(zero_reg));
+    }
+  }
+  __ bind(&done);
 }
 
 
 void LCodeGen::DoTaggedToI(LTaggedToI* instr) {
-  Abort("Unimplemented: %s (line %d)", __func__, __LINE__);
+  LOperand* input = instr->InputAt(0);
+  ASSERT(input->IsRegister());
+  ASSERT(input->Equals(instr->result()));  // TODO(plind): maybe bad assumption for mips?
+
+  Register input_reg = ToRegister(input);
+
+  DeferredTaggedToI* deferred = new DeferredTaggedToI(this, instr);
+
+  // Let the deferred code handle the HeapObject case.
+  __ JumpIfNotSmi(input_reg, deferred->entry());
+
+  // Smi to int32 conversion.
+  __ SmiUntag(input_reg);
+  __ bind(deferred->exit());
 }
 
 
