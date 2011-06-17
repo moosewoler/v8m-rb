@@ -1659,6 +1659,14 @@ void MacroAssembler::AllocateAsciiConsString(Register result,
 }
 
 
+void MacroAssembler::GetObjectType(Register object,
+                                   Register map,
+                                   Register type_reg) {
+  ldr(map, FieldMemOperand(object, HeapObject::kMapOffset));
+  ldrb(type_reg, FieldMemOperand(map, Map::kInstanceTypeOffset));
+}
+
+
 void MacroAssembler::CompareObjectType(Register object,
                                        Register map,
                                        Register type_reg,

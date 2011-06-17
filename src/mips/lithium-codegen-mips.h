@@ -219,10 +219,13 @@ class LCodeGen BASE_EMBEDDED {
                                   SafepointMode safepoint_mode);
 
   void RegisterEnvironmentForDeoptimization(LEnvironment* environment);
-  void DeoptimizeIf(Condition cc,
-                    LEnvironment* environment,
-                    Register src1,
-                    const Operand& src2);
+  void Deoptimize(LInstruction* instr);
+  void DeoptimizeIf(Condition cond, Register src1, const Operand& src2,
+                    LInstruction* instr);
+  void DeoptimizeIf(Condition cond, Register src1, Register src2,
+                    LInstruction* instr) {
+    DeoptimizeIf(cond, src1, Operand(src2), instr);
+  }
 
   void AddToTranslation(Translation* translation,
                         LOperand* op,
@@ -268,30 +271,32 @@ class LCodeGen BASE_EMBEDDED {
   void EmitGoto(int block, LDeferredCode* deferred_stack_check = NULL);
   void EmitBranch(int left_block,
                   int right_block,
-                  Condition cc,
+                  Condition cond,
                   Register src1,
                   const Operand& src2);
+  void EmitBranch(int left_block, int right_block,
+                  Condition cond, Register src1, Register src2) {
+    EmitBranch(left_block, right_block, cond, src1, Operand(src2));
+  }
   void EmitCmpI(LOperand* left, LOperand* right);
   void EmitNumberUntagD(Register input,
                         DoubleRegister result,
-                        LEnvironment* env);
+                        LInstruction* instr);
+
+  void TrueFalseRoot(Register result, Label* is_true);
 
   // Emits optimized code for typeof x == "y".  Modifies input register.
   // Returns the condition on which a final split to
   // true and false label should be made, to optimize fallthrough.
-  // Returns two registers in cmp1 and cmp2 that can be used in the
-  // Branch instruction after EmitTypeofIs.
   Condition EmitTypeofIs(Label* true_label,
                          Label* false_label,
                          Register input,
-                         Handle<String> type_name,
-                         Register& cmp1,
-                         Operand& cmp2);
+                         Handle<String> type_name);
 
   // Emits optimized code for %_IsObject(x).  Preserves input register.
-  // Returns the condition on which a final split to
+  // Returns the instance type in reg temp2 on which a final split to
   // true and false label should be made, to optimize fallthrough.
-  Condition EmitIsObject(Register input,
+  void EmitIsObject(Register input,
                          Register temp1,
                          Register temp2,
                          Label* is_not_object,

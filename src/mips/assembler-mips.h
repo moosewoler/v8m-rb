@@ -179,7 +179,7 @@ struct FPURegister {
   static const int kNumAllocatableRegisters = 15;
 
   static int ToAllocationIndex(FPURegister reg) {
-    ASSERT(reg.code() != 0);
+    // ASSERT(reg.code() != 0);  // TODO(duanes): f0 is legal on Mips; f30 reserved
     ASSERT(reg.code() % 2 == 0);
     return (reg.code() / 2);
   }
@@ -636,15 +636,33 @@ class Assembler : public AssemblerBase {
   void beq(Register rs, Register rt, Label* L) {
     beq(rs, rt, branch_offset(L, false) >> 2);
   }
+  void beqz(Register rs, Label* L) {
+    beq(rs, zero_reg, L);
+  }
   void bgez(Register rs, int16_t offset);
+  void bgez(Register rs, Label* L) {
+    bgez(rs, branch_offset(L, false)>>2);
+  }
   void bgezal(Register rs, int16_t offset);
   void bgtz(Register rs, int16_t offset);
+  void bgtz(Register rs, Label* L) {
+    bgtz(rs, branch_offset(L, false)>>2);
+  }
   void blez(Register rs, int16_t offset);
+  void blez(Register rs, Label* L) {
+    blez(rs, branch_offset(L, false)>>2);
+  }
   void bltz(Register rs, int16_t offset);
+  void bltz(Register rs, Label* L) {
+    bltz(rs, branch_offset(L, false)>>2);
+  }
   void bltzal(Register rs, int16_t offset);
   void bne(Register rs, Register rt, int16_t offset);
   void bne(Register rs, Register rt, Label* L) {
     bne(rs, rt, branch_offset(L, false)>>2);
+  }
+  void bnez(Register rs, Label* L) {
+    bne(rs, zero_reg, L);
   }
 
   // Never use the int16_t b(l)cond version with a branch offset
@@ -662,6 +680,9 @@ class Assembler : public AssemblerBase {
   // Arithmetic.
   void addu(Register rd, Register rs, Register rt);
   void subu(Register rd, Register rs, Register rt);
+  void negu(Register rd, Register rs) {
+    subu(rd, zero_reg, rs);
+  }
   void mult(Register rs, Register rt);
   void multu(Register rs, Register rt);
   void div(Register rs, Register rt);
@@ -675,6 +696,9 @@ class Assembler : public AssemblerBase {
   void or_(Register rd, Register rs, Register rt);
   void xor_(Register rd, Register rs, Register rt);
   void nor(Register rd, Register rs, Register rt);
+  void not_(Register rd, Register rs) {
+    nor(rd, zero_reg, rs);
+  }
 
   void andi(Register rd, Register rs, int32_t j);
   void ori(Register rd, Register rs, int32_t j);
@@ -755,6 +779,7 @@ class Assembler : public AssemblerBase {
 
   void mtc1(Register rt, FPURegister fs);
   void mfc1(Register rt, FPURegister fs);
+  void mfhc1(Register rt, FPURegister fs);
 
   void ctc1(Register rt, FPUControlRegister fs);
   void cfc1(Register rt, FPUControlRegister fs);

@@ -172,6 +172,12 @@ DECLARE_JUMP_CALL_PROTOTYPES(Jump)
 DECLARE_JUMP_CALL_PROTOTYPES(Call)
 
 DECLARE_BRANCH_PROTOTYPES(Branch)
+  void Branch(Condition cond, Register src1, const Operand& src2, Label* L) {
+    Branch(L, cond, src1, src2);
+  }
+  void Branch(Condition cond, Register src1, Register src2, Label* L) {
+    Branch(cond, src1, Operand(src2), L);
+  }
 DECLARE_BRANCH_PROTOTYPES(BranchAndLink)
 
 DECLARE_NOTARGET_PROTOTYPE(Ret)
@@ -462,6 +468,7 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   inline void li(Register dst, Handle<Object> value, bool gen2instr = false) {
     li(dst, Operand(value), gen2instr);
   }
+  void Mov(Register rd, const Operand& rt); 
 
   // Push multiple registers on the stack.
   // Registers are saved in numerical order, with higher numbered registers
@@ -1007,7 +1014,8 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // sets flags.
   // This is only used by crankshaft atm so it is unimplemented on MIPS.
   void TrySmiTag(Register reg, Label* not_a_smi, Register scratch) {
-    UNIMPLEMENTED_MIPS();
+    CHECK(false);  // temporary
+    Abort("Not yet implemented: TrySmiTag");
   }
 
   void SmiTag(Register reg) {

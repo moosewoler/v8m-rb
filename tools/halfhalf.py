@@ -1,31 +1,46 @@
-f0_split = -1  # eof  pass
-f1_split = -1  # eof
 
-f0_split = 0  # bof  fail, anywhere in f1
-f1_split = 0  # bof
+lo_split = 0,0   # 100% f1: intermit 20% failure
+hi_split = -1,-1 
 
-f0_split = 3504  # all orig 2+45 fails are in 3521 .. end
-f1_split = 3520
-# current 2+1 fail is not in 3521 .. end
+lo_split = 2574,2504  # 50% f0 then 50% f1: all pass
+hi_split = -1,-1
 
-#f0_split = 3643  # all orig 2+45 fails are in 3670 .. end
-#f1_split = 3669
+lo_split = 0,0        # 50% f1 then 50% f0: intermit 20% failure
+hi_split = 2574,2504
 
-#f0_split = 3720
-#f1_split = 3746  # all orig 2+45 fails are in 3746 .. end
+lo_split = 1789,1749  # 25% f0 then 25% f1 then 50% f0: all pass
+hi_split = 2574,2504
 
-f0_split = 2681  # current 2+1 fail is not in 2684 .. end
-f1_split = 2684
+lo_split = 0,0        # 25% f1 then 75% f0: intermit 25% failure
+hi_split = 1789,1749
 
-f0_split = 2649
-f1_split = 2651
+lo_split = 1310,1285  # 12% f0 then 13% f1 then 75% f0: intermit 20% failure
+hi_split = 1789,1749
+
+lo_split = 1310,1285  # 12% f0 then 6% f1 then 82% f0: intermit 20% failure
+hi_split = 1428,1401
+
+lo_split = 1310,1285  # intermit 20% failure
+hi_split = 1345,1318
+
+lo_split = 1310,1285  # intermit 20% failure
+hi_split = 1332,1306
+
+lo_split = 1310,1285  # intermit 20% failure
+hi_split = 1315,1290
+
+lo_split = 1310,1285  # pass
+hi_split = 1313,1288
+
+lo_split = 1313,1288  # intermit 20% failure, at a single change.
+hi_split = 1315,1290
 
 
 def main():
-  l0 = open('lithium-codegen-arm.cc.31').readlines()
-  l1 = open('lithium-codegen-arm.cc.3' ).readlines()
-  fo = open('lithium-codegen-arm.cc', 'w')
-  lo = l0[:f0_split] + l1[f1_split:]
+  l0 = open('src/arm/lithium-codegen-unarm.cc').readlines()
+  l1 = open('src/arm/lithium-codegen-arm-generated.cc' ).readlines()
+  fo = open('src/arm/lithium-codegen-arm.cc', 'w')
+  lo = l0[:lo_split[0]] + l1[lo_split[1]:hi_split[1]] + l0[hi_split[0]:]
   fo.writelines(lo)
 
 main()

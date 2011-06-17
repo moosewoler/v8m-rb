@@ -758,6 +758,9 @@ class Assembler : public AssemblerBase {
 
   void eor(Register dst, Register src1, const Operand& src2,
            SBit s = LeaveCC, Condition cond = al);
+  void not_(Register dst, Register src) {
+    mvn(dst, Operand(src));
+  }
 
   void sub(Register dst, Register src1, const Operand& src2,
            SBit s = LeaveCC, Condition cond = al);
@@ -812,6 +815,46 @@ class Assembler : public AssemblerBase {
   void mov(Register dst, Register src, SBit s = LeaveCC, Condition cond = al) {
     mov(dst, Operand(src), s, cond);
   }
+
+
+  // pseudo-ARM instructions added to facilitate Arm-->Mips port:
+  // integer arithmetic with overflow detection via condition code:
+  void subv(Register dst, Register src1, const Operand& src2) {
+    sub(dst, src1, src2, SetCC);
+  }
+  void subv(Register dst, Register src1, Register src2) {
+    sub(dst, src1, Operand(src2), SetCC);
+  }
+  void rsbv(Register dst, Register src1, const Operand& src2) {
+    rsb(dst, src1, src2, SetCC);
+  }
+  void addv(Register dst, Register src1, const Operand& src2) {
+    add(dst, src1, src2, SetCC);
+  }
+  void addv(Register dst, Register src1, Register src2) {
+    add(dst, src1, Operand(src2), SetCC);
+  }
+
+  // shift instructions:
+  void lsl(Register dst, Register src1, int src2) {
+    mov(dst, Operand(src1, LSL, src2));
+  }
+  void lsl(Register dst, Register src1, Register src2) {
+    mov(dst, Operand(src1, LSL, src2));
+  }
+  void lsr(Register dst, Register src1, int src2) {
+    mov(dst, Operand(src1, LSR, src2));
+  }         
+  void lsr(Register dst, Register src1, Register src2) {
+    mov(dst, Operand(src1, LSR, src2));
+  }
+  void asr(Register dst, Register src1, int src2) {
+    mov(dst, Operand(src1, ASR, src2));
+  }         
+  void asr(Register dst, Register src1, Register src2) {
+    mov(dst, Operand(src1, ASR, src2));
+  }  
+
 
   // ARMv7 instructions for loading a 32 bit immediate in two instructions.
   // This may actually emit a different mov instruction, but on an ARMv7 it

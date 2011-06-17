@@ -558,6 +558,10 @@ class MacroAssembler: public Assembler {
                                Register scratch,
                                Label* miss);
 
+  void GetObjectType(Register object,
+                     Register map,
+                     Register type_reg);
+
   // Compare object type for heap object.  heap_object contains a non-Smi
   // whose object type should be compared with the given type.  This both
   // sets the flags and leaves the object type in the type_reg register.
@@ -925,9 +929,10 @@ class MacroAssembler: public Assembler {
   // the original value and jump to not_a_smi. Destroys scratch and
   // sets flags.
   void TrySmiTag(Register reg, Label* not_a_smi, Register scratch) {
-    mov(scratch, reg);
-    SmiTag(scratch, SetCC);
-    b(vs, not_a_smi);
+    SmiTag(scratch, reg);
+    eor(ip, scratch, Operand(reg));
+    cmp(ip, Operand(0));
+    b(lt, not_a_smi);
     mov(reg, scratch);
   }
 
@@ -964,6 +969,15 @@ class MacroAssembler: public Assembler {
   void AbortIfNotRootValue(Register src,
                            Heap::RootListIndex root_value_index,
                            const char* message);
+
+  // Macros to facilitate Arm-->Mips port:
+  void Branch(Condition cond, Register src1, const Operand& src2, Label* L) {
+    cmp(src1, src2);
+    b(cond, L);
+  }
+  void Branch(Condition cond, Register src1, Register src2, Label* L) {
+    Branch(cond, src1, Operand(src2), L);
+  }
 
   // ---------------------------------------------------------------------------
   // HeapNumber utilities

@@ -678,6 +678,15 @@ void MacroAssembler::li(Register rd, Operand j, bool gen2instr) {
 }
 
 
+void MacroAssembler::Mov(Register rd, const Operand& rt) {
+  if (rt.is_reg()) {
+    mov(rd, rt.rm());
+  } else {
+    li(rd, rt.imm32_);
+  }
+}
+
+
 void MacroAssembler::MultiPush(RegList regs) {
   int16_t NumSaved = 0;
   int16_t NumToPush = NumberOfBitsSet(regs);

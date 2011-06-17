@@ -103,11 +103,8 @@ def process_line(fi, fo, line1):
       line2 = '%s__ cmp(%s, Operand(%s));\n' % (indent, typereg2, type3)
     elif op1 == 'CompareObjectType' and len(iparts1) == 6:
       indent, objreg1, mapreg2, typereg3, type4, comment = iparts1
-      line1 = ('%s// CompareObjectType(%s, %s, %s, %s);%s\n'
-               '%s__ ldr(%s, FieldMemOperand(%s, HeapObject::kMapOffset));\n'
-               '%s__ ldrb(%s, FieldMemOperand(%s, Map::kInstanceTypeOffset));\n'
-               % (indent, objreg1, mapreg2, typereg3, type4, comment,
-                  indent, mapreg2, objreg1, indent, typereg3, mapreg2))
+      line1 = ('%s__ GetObjectType(%s, %s, %s);%s\n'
+               % (indent, objreg1, mapreg2, typereg3, comment))
       line2 = '%s__ cmp(%s, Operand(%s));\n' % (indent, typereg3, type4)
     else:
       line2 = fi.readline()
@@ -119,54 +116,60 @@ def process_line(fi, fo, line1):
       if op1 == 'cmp' and op2 == 'b':
           indent, reg1, operand2, comment1 = iparts1
           indent2, cond, label, comment2 = iparts2
-          line1 = '%s__ BranchCmp(%s, %s, %s, %s);%s\n' % (
+          line1 = '%s__ Branch(%s, %s, %s, %s);%s\n' % (
                   indent, cond, reg1, operand2, label, comment1+comment2)
           line2 = fi.readline()
       elif op1 == 'tst' and op2 == 'b':
           indent, reg1, operand2, comment1 = iparts1
           indent2, cond, label, comment2 = iparts2
-          line1 = '%s__ BranchAnd(%s, %s, %s, %s);%s\n' % (
-                  indent, cond, reg1, operand2, label, comment1+comment2)
+          line1 = ('%s__ and_(ip, %s, %s);%s\n'
+                   '%s__ Branch(%s, ip, Operand(0), %s);%s\n'
+                   % (indent, reg1, operand2, comment1,
+                      indent, cond, label, comment2))
           line2 = fi.readline()
       elif op1 == 'cmp' and func2 == 'DeoptimizeIf':
           indent, reg1, operand2, comment1 = iparts1
           indent2, cond, env, comment2 = fparts2
           if env != 'instr->environment()':
             print 'error: expecting instr->environment() in', repr(line2[:-1])
-          line1 = '%sDeoptimizeIfCmp(%s, %s, %s, instr);%s\n' % (
+          line1 = '%sDeoptimizeIf(%s, %s, %s, instr);%s\n' % (
                   indent, cond, reg1, operand2, comment1+comment2)
           line2 = fi.readline()
       elif op1 == 'tst' and func2 == 'DeoptimizeIf':
           indent, reg1, operand2, comment1 = iparts1
           indent2, cond, env, comment2 = fparts2
           assert env == 'instr->environment()'
-          line1 = '%sDeoptimizeIfAnd(%s, %s, %s, instr);%s\n' % (
-                  indent, cond, reg1, operand2, comment1+comment2)
+          line1 = ('%s__ and_(ip, %s, %s);%s\n'
+                   '%sDeoptimizeIf(%s, ip, Operand(0), instr);%s\n'
+                   % (indent, reg1, operand2, comment1,
+                      indent, cond, comment2))
           line2 = fi.readline()
       elif op1 == 'cmp' and func2 == 'EmitBranch':
           indent, reg1, operand2, comment1 = iparts1
           indent2, true_block, false_block, cond, comment2 = fparts2
-          line1 = '%sEmitBranchCmp(%s, %s, %s, %s, %s);%s\n' % (
-                  indent, cond, reg1, operand2, true_block, false_block, comment1+comment2)
+          line1 = '%sEmitBranch(%s, %s, %s, %s, %s);%s\n' % (
+                  indent, true_block, false_block, cond, reg1, operand2, comment1+comment2)
           line2 = fi.readline()
       elif op1 == 'tst' and func2 == 'EmitBranch':
           indent, reg1, operand2, comment1 = iparts1
           indent2, true_block, false_block, cond, comment2 = fparts2
-          line1 = '%sEmitBranchAnd(%s, %s, %s, %s, %s);%s\n' % (
-                  indent, cond, reg1, operand2, true_block, false_block, comment1+comment2)
+          line1 = ('%s__ and_(ip, %s, %s);%s\n'
+                   '%sEmitBranch(%s, %s, %s, %s, %s);%s\n'
+                    % (indent, reg1, operand2, comment1,
+                       indent, true_block, false_block, cond, 'ip', 'Operand(0)', comment2))
           line2 = fi.readline()
       elif op1 == 'mov' and len(iparts1) == 4 and has_shiftop(iparts1[2]):
           # pattern that replaces one line:
           indent, reg1, operand2, comment = iparts1
           reg2, shiftop, count3 = parse_shift(operand2)
-          line1 = ('%s__ %s(%s, %s, Operand(%s));%s\n'
+          line1 = ('%s__ %s(%s, %s, %s);%s\n'
                    % (indent, shiftop, reg1, reg2, count3, comment))
     fo.write(line1)
     return line2
 
 def main():
-  fi = open('lithium-codegen-arm.cc.5')
-  fo = open('lithium-codegen-arm.cc.6', 'w')
+  fi = open('src/arm/lithium-codegen-unarm.cc')
+  fo = open('src/arm/lithium-codegen-arm.cc', 'w')
   line1 = fi.readline()
   while line1:
     line1 = process_line(fi, fo, line1)

@@ -81,10 +81,12 @@ class LCodeGen BASE_EMBEDDED {
   // LOperand must be a double register.
   DoubleRegister ToDoubleRegister(LOperand* op) const;
 
+#if 0  // dead code
   // LOperand is loaded into dbl_scratch, unless already a double register.
   DoubleRegister EmitLoadDoubleRegister(LOperand* op,
                                         SwVfpRegister flt_scratch,
                                         DoubleRegister dbl_scratch);
+#endif
   int ToInteger32(LConstantOperand* op) const;
   Operand ToOperand(LOperand* op);
   MemOperand ToMemOperand(LOperand* op) const;
@@ -218,7 +220,17 @@ class LCodeGen BASE_EMBEDDED {
                                   SafepointMode safepoint_mode);
 
   void RegisterEnvironmentForDeoptimization(LEnvironment* environment);
-  void DeoptimizeIf(Condition cc, LEnvironment* environment);
+  void Deoptimize(LInstruction* instr);
+  void DeoptimizeIf(Condition cond, Register src1, const Operand& src2,
+                    LInstruction* instr);
+  void DeoptimizeIf(Condition cond, Register src1, Register src2,
+                    LInstruction* instr) {
+    DeoptimizeIf(cond, src1, Operand(src2), instr);
+  }
+  void DeoptimizeIf(Condition cond, LEnvironment* environment);
+  void DeoptimizeIf(Condition cond, LInstruction* instr) {
+    DeoptimizeIf(cond, instr->environment());
+  }
 
   void AddToTranslation(Translation* translation,
                         LOperand* op,
@@ -262,11 +274,20 @@ class LCodeGen BASE_EMBEDDED {
 
   static Condition TokenToCondition(Token::Value op, bool is_unsigned);
   void EmitGoto(int block, LDeferredCode* deferred_stack_check = NULL);
-  void EmitBranch(int left_block, int right_block, Condition cc);
-  void EmitCmpI(LOperand* left, LOperand* right);
+#ifndef MIPS
+  void EmitBranch(int left_block, int right_block, Condition cond);
+#endif
+  void EmitBranch(int left_block, int right_block,
+                  Condition cond, Register src1, const Operand& src2);
+  void EmitBranch(int left_block, int right_block,
+                  Condition cond, Register src1, Register src2) {
+    EmitBranch(left_block, right_block, cond, src1, Operand(src2));
+  }
   void EmitNumberUntagD(Register input,
                         DoubleRegister result,
-                        LEnvironment* env);
+                        LInstruction* instr);
+
+  void TrueFalseRoot(Register result, Label* is_true);
 
   // Emits optimized code for typeof x == "y".  Modifies input register.
   // Returns the condition on which a final split to
@@ -275,9 +296,9 @@ class LCodeGen BASE_EMBEDDED {
                          Register input, Handle<String> type_name);
 
   // Emits optimized code for %_IsObject(x).  Preserves input register.
-  // Returns the condition on which a final split to
+  // Returns the instance type in reg temp2 on which a final split to
   // true and false label should be made, to optimize fallthrough.
-  Condition EmitIsObject(Register input,
+  void EmitIsObject(Register input,
                          Register temp1,
                          Register temp2,
                          Label* is_not_object,
