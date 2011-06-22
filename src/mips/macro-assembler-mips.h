@@ -172,10 +172,12 @@ DECLARE_JUMP_CALL_PROTOTYPES(Jump)
 DECLARE_JUMP_CALL_PROTOTYPES(Call)
 
 DECLARE_BRANCH_PROTOTYPES(Branch)
-  void Branch(Condition cond, Register src1, const Operand& src2, Label* L) {
+  inline void Branch(Condition cond, Register src1, const Operand& src2,
+                     Label* L) {
     Branch(L, cond, src1, src2);
   }
-  void Branch(Condition cond, Register src1, Register src2, Label* L) {
+  inline void Branch(Condition cond, Register src1, Register src2,
+                     Label* L) {
     Branch(cond, src1, Operand(src2), L);
   }
 DECLARE_BRANCH_PROTOTYPES(BranchAndLink)
@@ -1009,13 +1011,13 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // -------------------------------------------------------------------------
   // Smi utilities.
 
-  // Try to convert int32 to smi. If the value is to large, preserve
-  // the original value and jump to not_a_smi. Destroys scratch and
-  // sets flags.
-  // This is only used by crankshaft atm so it is unimplemented on MIPS.
+  // Try to convert int32 to smi. If the value is too large, preserve
+  // the original value and jump to not_a_smi. Destroys scratch.
   void TrySmiTag(Register reg, Label* not_a_smi, Register scratch) {
-    CHECK(false);  // temporary
-    Abort("Not yet implemented: TrySmiTag");
+    SmiTag(scratch, reg);
+    xor_(at, scratch, reg);
+    Branch(lt, at, Operand(zero_reg), not_a_smi);
+    mov(reg, scratch);
   }
 
   void SmiTag(Register reg) {

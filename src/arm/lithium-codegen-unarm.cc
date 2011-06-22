@@ -32,16 +32,20 @@
 #include "code-stubs.h"
 #include "stub-cache.h"
 
-#ifdef V8_TARGET_ARCH_MIPS
-#endif  // use same subset on Arm
 #define MIPS_STUB
-#define NotYet UNIMPLEMENTED()
-//#endif
+//#define NotYet V8_Fatal(__FILE__, __LINE__, "not yet implemented")
+#define NotYet Abort("Unimplemented: %s line %d", __func__, __LINE__)
 
 #ifdef V8_TARGET_ARCH_MIPS
 #define c_rval_reg v0
+#define transcend_rval_reg f4
+//#define RuntimeAbort __ cvt_w_s(f0, f0)
+#define RuntimeAbort Abort("Unimplemented: %s line %d", __func__, __LINE__)
 #else
 #define c_rval_reg r0
+#define transcend_rval_reg d2
+//#define RuntimeAbort __ bkpt(12345)
+#define RuntimeAbort Abort("Unimplemented: %s line %d", __func__, __LINE__)
 #endif
 
 namespace v8 {
@@ -292,8 +296,7 @@ bool LCodeGen::GenerateDeferredCode() {
 
 bool LCodeGen::GenerateDeoptJumpTable() {
 #ifdef MIPS_STUB
-  // NotYet;   // Apparently empty jump table is nonfatal
-  return false;
+  // empty jump table is nonfatal
 #else
   // Check that the jump table is accessible from everywhere in the function
   // code, ie that offsets to the table can be encoded in the 24bit signed
@@ -320,12 +323,12 @@ bool LCodeGen::GenerateDeoptJumpTable() {
   ASSERT(masm()->InstructionsGeneratedSince(&table_start) ==
       deopt_jump_table_.length() * 2);
   __ RecordComment("]");
+#endif
 
   // The deoptimization jump table is the last part of the instruction
   // sequence. Mark the generated code as done unless we bailed out.
   if (!is_aborted()) status_ = DONE;
   return !is_aborted();
-#endif
 }
 
 
@@ -643,14 +646,8 @@ void LCodeGen::RegisterEnvironmentForDeoptimization(LEnvironment* environment) {
 }
 
 
-void LCodeGen::Deoptimize(LInstruction* instr) {
-  DeoptimizeIf(al, ip, ip, instr);
-}
-
-
-void LCodeGen::DeoptimizeIf(Condition cond, Register src1, const Operand& src2,
-                            LInstruction* instr) {
-  LEnvironment* environment = instr->environment();
+void LCodeGen::DeoptimizeIf(Condition cond, LEnvironment* environment,
+                            Register src1, const Operand& src2) {
   RegisterEnvironmentForDeoptimization(environment);
   ASSERT(environment->HasBeenRegistered());
   int id = environment->deoptimization_index();
@@ -677,6 +674,9 @@ void LCodeGen::DeoptimizeIf(Condition cond, Register src1, const Operand& src2,
        __ bind(&nonstop);
     }
 
+#ifdef MIPS_STUB
+   __ Jump(entry, RelocInfo::RUNTIME_ENTRY, cond, src1, src2);
+#else
     // We often have several deopts to the same entry, reuse the last
     // jump entry if this is the case.
     if (deopt_jump_table_.is_empty() ||
@@ -685,6 +685,7 @@ void LCodeGen::DeoptimizeIf(Condition cond, Register src1, const Operand& src2,
     }
     __ cmp(src1, src2);
     __ b(cond, &deopt_jump_table_.last().label);
+#endif
   }
 }
 
@@ -716,6 +717,9 @@ void LCodeGen::DeoptimizeIf(Condition cond, LEnvironment* environment) {
        __ bind(&nonstop);
     }
 
+#ifdef MIPS_STUB
+    __ Jump(entry, RelocInfo::RUNTIME_ENTRY, cond);
+#else
     // We often have several deopts to the same entry, reuse the last
     // jump entry if this is the case.
     if (deopt_jump_table_.is_empty() ||
@@ -723,6 +727,7 @@ void LCodeGen::DeoptimizeIf(Condition cond, LEnvironment* environment) {
       deopt_jump_table_.Add(JumpTableEntry(entry));
     }
     __ b(cond, &deopt_jump_table_.last().label);
+#endif
   }
 }
 #endif
@@ -1382,11 +1387,11 @@ void LCodeGen::DoShiftI(LShiftI* instr) {
         break;
       case Token::SHR:
         if (shift_count == 0) {
-          // TODO(duanes): this seems bogus
-          // if (instr->can_deopt()) {
-          //   __ tst(result, Operand(0x80000000));
-          //   DeoptimizeIf(ne, instr->environment());
-          // }
+          // TODO(duanes): why deoptimize on zero-shift of neg val?
+          if (instr->can_deopt()) {
+            __ cmp(result, Operand(0));
+            DeoptimizeIf(mi, instr->environment());
+          }
         } else {
           __ mov(result, Operand(result, LSR, shift_count));
         }
@@ -1725,19 +1730,20 @@ void LCodeGen::DoBranch(LBranch* instr) {
       Label call_stub;
       DoubleRegister dbl_scratch = d0;
       Register scratch = scratch0();
-#ifdef MIPS_STUB
-      __ stop("DoBranch of double: not yet implemented");
-#else
       __ ldr(scratch, FieldMemOperand(reg, HeapObject::kMapOffset));
       __ LoadRoot(ip, Heap::kHeapNumberMapRootIndex);
       __ cmp(scratch, Operand(ip));
       __ b(ne, &call_stub);
+#ifdef MIPS_STUB
+      RuntimeAbort;
+#else
       __ sub(ip, reg, Operand(kHeapObjectTag));
       __ vldr(dbl_scratch, ip, HeapNumber::kValueOffset);
       __ VFPCompareAndLoadFlags(dbl_scratch, 0.0, scratch);
       __ tst(scratch, Operand(kVFPZConditionFlagBit | kVFPVConditionFlagBit));
       __ b(ne, false_label);
       __ b(true_label);
+#endif
 
       // The conversion stub doesn't cause garbage collections so it's
       // safe to not record a safepoint after the call.
@@ -1745,10 +1751,11 @@ void LCodeGen::DoBranch(LBranch* instr) {
       ToBooleanStub stub(reg);
       RegList saved_regs = (kJSCallerSaved | kCalleeSaved) & ~scratch.bit();
       __ stm(db_w, sp, saved_regs);
+      //__ MultiPush(saved_regs);
       __ CallStub(&stub);
       __ mov(scratch, reg);
+      //__ MultiPop(saved_regs);
       __ ldm(ia_w, sp, saved_regs);
-#endif
       __ cmp(scratch, Operand(0));
       EmitBranch(true_block, false_block, ne);
     }
@@ -3435,7 +3442,7 @@ void LCodeGen::DoPower(LPower* instr) {
 
 
 void LCodeGen::DoMathLog(LUnaryMathOperation* instr) {
-  ASSERT(ToDoubleRegister(instr->result()).is(d2));
+  ASSERT(ToDoubleRegister(instr->result()).is(transcend_rval_reg));
   TranscendentalCacheStub stub(TranscendentalCache::LOG,
                                TranscendentalCacheStub::UNTAGGED);
   CallCode(stub.GetCode(), RelocInfo::CODE_TARGET, instr);
@@ -3443,7 +3450,7 @@ void LCodeGen::DoMathLog(LUnaryMathOperation* instr) {
 
 
 void LCodeGen::DoMathCos(LUnaryMathOperation* instr) {
-  ASSERT(ToDoubleRegister(instr->result()).is(d2));
+  ASSERT(ToDoubleRegister(instr->result()).is(transcend_rval_reg));
   TranscendentalCacheStub stub(TranscendentalCache::COS,
                                TranscendentalCacheStub::UNTAGGED);
   CallCode(stub.GetCode(), RelocInfo::CODE_TARGET, instr);
@@ -3451,7 +3458,7 @@ void LCodeGen::DoMathCos(LUnaryMathOperation* instr) {
 
 
 void LCodeGen::DoMathSin(LUnaryMathOperation* instr) {
-  ASSERT(ToDoubleRegister(instr->result()).is(d2));
+  ASSERT(ToDoubleRegister(instr->result()).is(transcend_rval_reg));
   TranscendentalCacheStub stub(TranscendentalCache::SIN,
                                TranscendentalCacheStub::UNTAGGED);
   CallCode(stub.GetCode(), RelocInfo::CODE_TARGET, instr);
@@ -4084,7 +4091,7 @@ void LCodeGen::EmitNumberUntagD(Register input_reg,
                                 LInstruction* instr) {
   Register scratch = scratch0();
   SwVfpRegister flt_scratch = double_scratch0().low();
-  ASSERT(!result_reg.is(flt_scratch));
+  ASSERT(!result_reg.is(double_scratch0()));
 
   Label load_smi, heap_number, done;
 
@@ -4152,9 +4159,6 @@ void LCodeGen::DoDeferredTaggedToI(LTaggedToI* instr) {
   __ LoadRoot(ip, Heap::kHeapNumberMapRootIndex);
 
   if (instr->truncating()) {
-#ifdef MIPS_STUB
-    __ stop("DoDeferredTaggedToI, ECMA: not yet implemented");
-#else
     Register scratch3 = ToRegister(instr->TempAt(1));
     DwVfpRegister double_scratch2 = ToDoubleRegister(instr->TempAt(2));
     ASSERT(!scratch3.is(input_reg) &&
@@ -4183,11 +4187,10 @@ void LCodeGen::DoDeferredTaggedToI(LTaggedToI* instr) {
                         scratch1,
                         scratch2,
                         scratch3);
-#endif
 
   } else {
 #ifdef MIPS_STUB
-    __ stop("DoDeferredTaggedToI, non ECMA: not yet implemented");
+    NotYet;
 #else
     CpuFeatures::Scope scope(VFP3);
     // Deoptimize if we don't have a heap number.

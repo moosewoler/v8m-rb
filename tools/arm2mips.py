@@ -17,6 +17,7 @@ ARM_TO_MIPS = {
   'vcvt_f64_f32': 'cvt_d_s',
   'vcvt_s32_f64': 'cvt_w_d',
   'vcvt_f32_f64': 'cvt_s_d',
+  'b': 'Branch',
   }
 
 ARM_TO_MIPS_IMM = {
@@ -235,7 +236,8 @@ def process_line(fi, fo, line1):
         mips_op = 'mov_d'
       line1 = ('%s__ %s(%s, %s);%s\n'
                % (indent, mips_op, reg1, reg2, comment))
-    elif op1 == 'Branch':
+    elif False and op1 == 'Branch':
+      # Disable this; assembler-mips's branch ops don't protect delay slots
       indent, cond, reg1, operand2, label, comment = iparts1
       imm_val = const_operand(operand2)
       reg2 = reg_operand(operand2)
@@ -274,6 +276,14 @@ def process_line(fi, fo, line1):
                    '%s__ %s(at, %s);\n'
                    % (indent, unsigned, reg1, imm_val, comment,
                       indent, b_op, label))
+    elif op1 == 'Branch':
+      indent, cond, reg1, operand2, label, comment = iparts1
+      if operand2 == 'Operand(0)':
+        operand2 = 'Operand(zero_reg)'
+        if   cond == 'pl':  cond = 'ge'
+        elif cond == 'mi':  cond = 'lt'
+      line1 = ('%s__ Branch(%s, %s, %s, %s);%s\n'
+               % (indent, cond, reg1, operand2, label, comment))
     elif line1.startswith('#include '):
       line1 = line1.replace('arm', 'mips')
     fo.write(line1)

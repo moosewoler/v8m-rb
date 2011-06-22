@@ -91,6 +91,11 @@ class MacroAssembler: public Assembler {
   // Jump, Call, and Ret pseudo instructions implementing inter-working.
   void Jump(Register target, Condition cond = al);
   void Jump(byte* target, RelocInfo::Mode rmode, Condition cond = al);
+  void Jump(byte* target, RelocInfo::Mode rmode, Condition cond,
+            Register r1, const Operand& r2) {
+    cmp(r1, r2);
+    Jump(target, rmode, cond);
+  }
   void Jump(Handle<Code> code, RelocInfo::Mode rmode, Condition cond = al);
   int CallSize(Register target, Condition cond = al);
   void Call(Register target, Condition cond = al);
@@ -254,6 +259,13 @@ class MacroAssembler: public Assembler {
     }
   }
 
+  // Push multiple registers on the stack.
+  // Registers are saved in numerical order, with higher numbered registers
+  // saved in higher memory addresses.
+  void MultiPush(RegList regs) {
+    stm(db_w, sp, regs);
+  }
+
   // Pop two registers. Pops rightmost register first (from lower address).
   void Pop(Register src1, Register src2, Condition cond = al) {
     ASSERT(!src1.is(src2));
@@ -263,6 +275,12 @@ class MacroAssembler: public Assembler {
       ldr(src2, MemOperand(sp, 4, PostIndex), cond);
       ldr(src1, MemOperand(sp, 4, PostIndex), cond);
     }
+  }
+
+  // Pops multiple values from the stack and load them in the
+  // registers specified in regs. Pop order is the opposite as in MultiPush.
+  void MultiPop(RegList regs) {
+    ldm(ia_w, sp, regs);
   }
 
   // Push and pop the registers that can hold pointers, as defined by the

@@ -132,6 +132,8 @@ def process_line(fi, fo, line1):
           indent2, cond, env, comment2 = fparts2
           if env != 'instr->environment()':
             print 'error: expecting instr->environment() in', repr(line2[:-1])
+          if cond in ('mi', 'pl') and operand2 == 'Operand(0)':
+            cond = 'lt' if cond == 'mi' else 'ge'
           line1 = '%sDeoptimizeIf(%s, %s, %s, instr);%s\n' % (
                   indent, cond, reg1, operand2, comment1+comment2)
           line2 = fi.readline()
