@@ -682,7 +682,8 @@ void MacroAssembler::Mov(Register rd, const Operand& rt) {
   if (rt.is_reg()) {
     mov(rd, rt.rm());
   } else {
-    li(rd, rt.imm32_);
+    // don't use rt.imm32_ here; may be chain of reloc refs
+    li(rd, rt);
   }
 }
 

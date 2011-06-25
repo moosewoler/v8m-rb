@@ -1750,12 +1750,10 @@ void LCodeGen::DoBranch(LBranch* instr) {
       __ bind(&call_stub);
       ToBooleanStub stub(reg);
       RegList saved_regs = (kJSCallerSaved | kCalleeSaved) & ~scratch.bit();
-      __ stm(db_w, sp, saved_regs);
-      //__ MultiPush(saved_regs);
+      __ MultiPush(saved_regs);
       __ CallStub(&stub);
       __ mov(scratch, reg);
-      //__ MultiPop(saved_regs);
-      __ ldm(ia_w, sp, saved_regs);
+      __ MultiPop(saved_regs);
       __ cmp(scratch, Operand(0));
       EmitBranch(true_block, false_block, ne);
     }
