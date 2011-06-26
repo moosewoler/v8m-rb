@@ -1209,8 +1209,9 @@ void LCodeGen::DoDeferredBinaryOpStub(LTemplateInstruction<1, 2, T>* instr,
   RecordSafepointWithRegistersAndDoubles(instr->pointer_map(),
                                          0,
                                          Safepoint::kNoDeoptimizationIndex);
-  // Overwrite the stored value of r0 with the result of the stub.
-  __ StoreToSafepointRegistersAndDoublesSlot(r0, r0);
+  // Overwrite the stored value of c_rval_reg with the result of the stub.
+  // TODO(plind): validate this is correct.....
+  __ StoreToSafepointRegistersAndDoublesSlot(c_rval_reg, c_rval_reg);
 }
 
 
@@ -1752,7 +1753,8 @@ void LCodeGen::DoBranch(LBranch* instr) {
       RegList saved_regs = (kJSCallerSaved | kCalleeSaved) & ~scratch.bit();
       __ MultiPush(saved_regs);
       __ CallStub(&stub);
-      __ mov(scratch, reg);
+      // TODO(duanes): verify that stub result comes back in c_rval_reg
+      __ mov(scratch, c_rval_reg);
       __ MultiPop(saved_regs);
       __ cmp(scratch, Operand(0));
       EmitBranch(true_block, false_block, ne);
@@ -2484,7 +2486,7 @@ void LCodeGen::DoCmpT(LCmpT* instr) {
   if (op == Token::GT || op == Token::LTE) {
     condition = ReverseCondition(condition);
   }
-  __ cmp(r0, Operand(0));  // This instruction also signals no smi code inlined.
+  __ cmp(c_rval_reg, Operand(0));  // This instruction also signals no smi code inlined.
   __ b(condition, &is_true);
   TrueFalseRoot(ToRegister(instr->result()), &is_true);
 }
@@ -2630,6 +2632,7 @@ void LCodeGen::DoLoadNamedFieldPolymorphic(LLoadNamedFieldPolymorphic* instr) {
   Handle<String> name = instr->hydrogen()->name();
   if (map_count == 0) {
     ASSERT(instr->hydrogen()->need_generic());
+    ASSERT(result.is(c_rval_reg));
     __ mov(r2, Operand(name));
     Handle<Code> ic = isolate()->builtins()->LoadIC_Initialize();
     CallCode(ic, RelocInfo::CODE_TARGET, instr);
@@ -2647,6 +2650,7 @@ void LCodeGen::DoLoadNamedFieldPolymorphic(LLoadNamedFieldPolymorphic* instr) {
     }
     Handle<Map> map = instr->hydrogen()->types()->last();
     if (instr->hydrogen()->need_generic()) {
+      ASSERT(result.is(c_rval_reg));
       Label generic;
       __ cmp(scratch, Operand(map));
       __ b(ne, &generic);
@@ -2879,6 +2883,7 @@ void LCodeGen::DoLoadKeyedSpecializedArrayElement(
 void LCodeGen::DoLoadKeyedGeneric(LLoadKeyedGeneric* instr) {
   ASSERT(ToRegister(instr->object()).is(r1));
   ASSERT(ToRegister(instr->key()).is(r0));
+  ASSERT(ToRegister(instr->result()).is(c_rval_reg));
 
   Handle<Code> ic = isolate()->builtins()->KeyedLoadIC_Initialize();
   CallCode(ic, RelocInfo::CODE_TARGET, instr);
@@ -3108,9 +3113,8 @@ void LCodeGen::CallKnownFunction(Handle<JSFunction> function,
 
 void LCodeGen::DoCallConstantFunction(LCallConstantFunction* instr) {
   ASSERT(ToRegister(instr->result()).is(c_rval_reg));
-#ifdef V8_TARGET_ARCH_MIPS
-  __ mov(r0, c_rval_reg);  // is this actually needed?
-#endif
+  if (!r0.is(c_rval_reg))
+    __ mov(r0, c_rval_reg);
   __ mov(r1, Operand(instr->function()));
   CallKnownFunction(instr->function(),
                     instr->arity(),
@@ -4009,8 +4013,8 @@ void LCodeGen::DoDeferredNumberTagI(LNumberTagI* instr) {
   __ mov(ip, Operand(0));
   __ StoreToSafepointRegisterSlot(ip, reg);
   CallRuntimeFromDeferred(Runtime::kAllocateHeapNumber, 0, instr);
-  if (!reg.is(r0))
-     __ mov(reg, r0);
+  if (!reg.is(c_rval_reg))
+     __ mov(reg, c_rval_reg);
 
   // Done. Put the value in dbl_scratch into the value of the allocated heap
   // number.
@@ -4500,6 +4504,7 @@ void LCodeGen::DoArrayLiteral(LArrayLiteral* instr) {
 
 
 void LCodeGen::DoObjectLiteral(LObjectLiteral* instr) {
+  ASSERT(ToRegister(instr->result()).is(c_rval_reg));
   __ ldr(r4, MemOperand(fp, JavaScriptFrameConstants::kFunctionOffset));
   __ ldr(r4, FieldMemOperand(r4, JSFunction::kLiteralsOffset));
   __ mov(r3, Operand(Smi::FromInt(instr->hydrogen()->literal_index())));
@@ -4518,6 +4523,7 @@ void LCodeGen::DoObjectLiteral(LObjectLiteral* instr) {
 
 void LCodeGen::DoToFastProperties(LToFastProperties* instr) {
   ASSERT(ToRegister(instr->InputAt(0)).is(r0));
+  ASSERT(ToRegister(instr->result()).is(c_rval_reg));
   __ push(r0);
   CallRuntime(Runtime::kToFastProperties, 1, instr);
 }
@@ -4601,6 +4607,7 @@ void LCodeGen::DoFunctionLiteral(LFunctionLiteral* instr) {
 
 
 void LCodeGen::DoTypeof(LTypeof* instr) {
+  ASSERT(ToRegister(instr->result()).is(c_rval_reg));
   Register input = ToRegister(instr->InputAt(0));
   __ push(input);
   CallRuntime(Runtime::kTypeof, 1, instr);

@@ -57,6 +57,7 @@ REG_RENAMES = {
   'DwVfpRegister': 'FPURegister',
   'SwVfpRegister': 'FPURegister',  # Mips typenames don't distinguish single-width uses of FP registers
   'VFP3': 'FPU',  ## causing linkage problems in debug-compiled version??
+  'Operand(0)': 'Operand(zero_reg)',  # helps branch macro avoid 'li at,0'
   }
 
 def get_op(line):
@@ -202,7 +203,7 @@ def process_line(fi, fo, line1):
       mips_op = SHIFT_OPS[op1]
       if likely_int_reg(operand3): mips_op += 'v'
       line1 = line1.replace(op1, mips_op, 1)
-    elif op1 == 'rsb' and iparts1[3] == 'Operand(0)':
+    elif op1 == 'rsb' and iparts1[3] == 'Operand(zero_reg)':
       indent, reg1, reg2, operand3, comment = iparts1
       line1 = ('%s__ negu(%s, %s);%s\n'
                % (indent, reg1, reg2, comment))
@@ -241,7 +242,7 @@ def process_line(fi, fo, line1):
       indent, cond, reg1, operand2, label, comment = iparts1
       imm_val = const_operand(operand2)
       reg2 = reg_operand(operand2)
-      if operand2 == 'Operand(0)' and cond in CC_TO_BGEZ:
+      if operand2 == 'Operand(zero_reg)' and cond in CC_TO_BGEZ:
         mips_op = CC_TO_BGEZ[cond]
         line1 = ('%s__ %s(%s, %s);%s\n'
                  % (indent, mips_op, reg1, label, comment))
@@ -278,8 +279,7 @@ def process_line(fi, fo, line1):
                       indent, b_op, label))
     elif op1 == 'Branch':
       indent, cond, reg1, operand2, label, comment = iparts1
-      if operand2 == 'Operand(0)':
-        operand2 = 'Operand(zero_reg)'
+      if operand2 == 'Operand(zero_reg)':
         if   cond == 'pl':  cond = 'ge'
         elif cond == 'mi':  cond = 'lt'
       line1 = ('%s__ Branch(%s, %s, %s, %s);%s\n'
