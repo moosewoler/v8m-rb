@@ -1753,8 +1753,7 @@ void LCodeGen::DoBranch(LBranch* instr) {
       RegList saved_regs = (kJSCallerSaved | kCalleeSaved) & ~scratch.bit();
       __ MultiPush(saved_regs);
       __ CallStub(&stub);
-      // TODO(duanes): verify that stub result comes back in c_rval_reg
-      __ mov(scratch, c_rval_reg);
+      __ mov(scratch, reg);
       __ MultiPop(saved_regs);
       __ cmp(scratch, Operand(0));
       EmitBranch(true_block, false_block, ne);
@@ -2415,10 +2414,10 @@ void LCodeGen::DoInstanceOfKnownGlobal(LInstanceOfKnownGlobal* instr) {
 void LCodeGen::DoDeferredLInstanceOfKnownGlobal(LInstanceOfKnownGlobal* instr,
                                                 Label* map_check) {
 #ifdef MIPS_STUB
-  NotYet;
-#else
+  RuntimeAbort;  // patching of inlined stubs not yet enabled for Mips
+#endif
   Register result = ToRegister(instr->result());
-  ASSERT(result.is(r0));
+  ASSERT(result.is(c_rval_reg));
 
   InstanceofStub::Flags flags = InstanceofStub::kNoFlags;
   flags = static_cast<InstanceofStub::Flags>(
@@ -2441,7 +2440,9 @@ void LCodeGen::DoDeferredLInstanceOfKnownGlobal(LInstanceOfKnownGlobal* instr,
   int delta = masm_->InstructionsGeneratedSince(map_check) + kAdditionalDelta;
   Label before_push_delta;
   __ bind(&before_push_delta);
+#ifndef V8_TARGET_ARCH_MIPS
   __ BlockConstPoolFor(kAdditionalDelta);
+#endif
   __ mov(temp, Operand(delta * kPointerSize));
   __ StoreToSafepointRegisterSlot(temp, temp);
   CallCodeGeneric(stub.GetCode(),
@@ -2451,7 +2452,6 @@ void LCodeGen::DoDeferredLInstanceOfKnownGlobal(LInstanceOfKnownGlobal* instr,
   // Put the result value into the result register slot and
   // restore all registers.
   __ StoreToSafepointRegisterSlot(result, result);
-#endif
 }
 
 
@@ -3253,7 +3253,7 @@ void LCodeGen::DoMathFloor(LUnaryMathOperation* instr) {
                      input,
                      scratch1,
                      scratch2);
-  DeoptimizeIf(ne, instr);
+  DeoptimizeIf(ne, instr->environment());
 
   // Move the result back to general purpose register r0.
   __ vmov(result, single_scratch);
@@ -3332,7 +3332,7 @@ void LCodeGen::DoMathRound(LUnaryMathOperation* instr) {
                      input,
                      scratch1,
                      scratch2);
-  DeoptimizeIf(ne, instr);
+  DeoptimizeIf(ne, instr->environment());
   __ vmov(result, double_scratch0().low());
 
   if (instr->hydrogen()->CheckFlag(HValue::kBailoutOnMinusZero)) {
@@ -4152,9 +4152,11 @@ void LCodeGen::DoDeferredTaggedToI(LTaggedToI* instr) {
 
   ASSERT(!scratch1.is(input_reg) && !scratch1.is(scratch2));
   ASSERT(!scratch2.is(input_reg) && !scratch2.is(scratch1));
+  ASSERT(ToRegister(instr->result()).is(input_reg));
 
   Label done;
 
+  // The input is a tagged HeapObject.
   ASSERT(kHeapObjectTag == 1);
   // Heap number map check.
   __ ldr(scratch1, FieldMemOperand(input_reg, HeapObject::kMapOffset));
@@ -4170,7 +4172,7 @@ void LCodeGen::DoDeferredTaggedToI(LTaggedToI* instr) {
     // the JS bitwise operations.
     Label heap_number;
     __ cmp(scratch1, Operand(ip));
-    __ b(eq, &heap_number);
+    __ b(eq, &heap_number);  // HeapNumber map?
     // Check for undefined. Undefined is converted to zero for truncating
     // conversions.
     __ LoadRoot(ip, Heap::kUndefinedValueRootIndex);
@@ -4191,23 +4193,35 @@ void LCodeGen::DoDeferredTaggedToI(LTaggedToI* instr) {
                         scratch3);
 
   } else {
-#ifdef MIPS_STUB
-    NotYet;
-#else
     CpuFeatures::Scope scope(VFP3);
     // Deoptimize if we don't have a heap number.
     __ cmp(scratch1, Operand(ip));
     DeoptimizeIf(ne, instr->environment());
 
-    __ sub(ip, input_reg, Operand(kHeapObjectTag));
-    __ vldr(double_scratch, ip, HeapNumber::kValueOffset);
+    __ vldr(double_scratch, FieldMemOperand(input_reg, HeapNumber::kValueOffset));
+#ifdef V8_TARGET_ARCH_MIPS
+    // TODO(plind): this code is still untested.
+    __ cfc1(scratch1, FCSR);  // Save current FCSR
+    __ ctc1(zero_reg, FCSR);  // Disable FP exceptions
+    // TODO(plind): it appears this instuction rounds towards zero regardless
+    // of the rounding mode in FCSR. Verify, fix if needed, and remove comment.
+    __ trunc_w_d(single_scratch, double_scratch);
+    __ cfc1(scratch2, FCSR);  // Test flags
+    __ ctc1(scratch1, FCSR);  // Restore prior FCSR
+
+    // Check for inexact conversion or exception (non-zero flags).
+    // Deopt if the operation did not succeed.
+    __ tst(scratch2, Operand(kFCSRFlagMask));
+    DeoptimizeIf(ne, instr->environment());
+#else
     __ EmitVFPTruncate(kRoundToZero,
                        single_scratch,
                        double_scratch,
                        scratch1,
                        scratch2,
                        kCheckForInexactConversion);
-    DeoptimizeIf(ne, instr);
+    DeoptimizeIf(ne, instr->environment());
+#endif
     // Load the result.
     __ vmov(input_reg, single_scratch);
 
@@ -4218,7 +4232,6 @@ void LCodeGen::DoDeferredTaggedToI(LTaggedToI* instr) {
       __ tst(scratch1, Operand(HeapNumber::kSignMask));
       DeoptimizeIf(ne, instr->environment());
     }
-#endif
   }
   __ bind(&done);
 }
@@ -4284,7 +4297,7 @@ void LCodeGen::DoDoubleToI(LDoubleToI* instr) {
                        kCheckForInexactConversion);
     // Deoptimize if we had a vfp invalid exception,
     // including inexact operation.
-    DeoptimizeIf(ne, instr);
+    DeoptimizeIf(ne, instr->environment());
     // Retrieve the result.
     __ vmov(result_reg, single_scratch);
   }
