@@ -172,13 +172,8 @@ DECLARE_JUMP_CALL_PROTOTYPES(Jump)
 DECLARE_JUMP_CALL_PROTOTYPES(Call)
 
 DECLARE_BRANCH_PROTOTYPES(Branch)
-  inline void Branch(Condition cond, Register src1, const Operand& src2,
-                     Label* L) {
-    Branch(L, cond, src1, src2);
-  }
-  inline void Branch(Condition cond, Register src1, Register src2,
-                     Label* L) {
-    Branch(cond, src1, Operand(src2), L);
+  inline void Branch(Label* L, Condition cond, Register src1, Register src2) {
+    Branch(L, cond, src1, Operand(src2));
   }
 DECLARE_BRANCH_PROTOTYPES(BranchAndLink)
 
@@ -1016,7 +1011,7 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   void TrySmiTag(Register reg, Label* not_a_smi, Register scratch) {
     SmiTag(scratch, reg);
     xor_(at, scratch, reg);
-    Branch(lt, at, Operand(zero_reg), not_a_smi);
+    Branch(not_a_smi, lt, at, zero_reg);
     mov(reg, scratch);
   }
 

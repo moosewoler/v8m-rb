@@ -219,20 +219,14 @@ class LCodeGen BASE_EMBEDDED {
                                   SafepointMode safepoint_mode);
 
   void RegisterEnvironmentForDeoptimization(LEnvironment* environment);
-  void DeoptimizeIf(Condition cc,
-                    LEnvironment* environment,
-                    Register src1,
-                    const Operand& src2);
-  inline void DeoptimizeIf(Condition cond, Register src1, const Operand& src2,
-                           LInstruction* instr) {
-    DeoptimizeIf(cond, instr->environment(), src1, src2);
+  void DeoptimizeIf(Condition cond, LEnvironment* environment,
+                    Register src1, const Operand& src2);
+  inline void DeoptimizeIf(Condition cond, LEnvironment* environment,
+                           Register src1, Register src2) {
+    DeoptimizeIf(cond, environment, src1, Operand(src2));
   }
-  inline void DeoptimizeIf(Condition cond, Register src1, Register src2,
-                           LInstruction* instr) {
-    DeoptimizeIf(cond, src1, Operand(src2), instr);
-  }
-  inline void Deoptimize(LInstruction* instr) {
-    DeoptimizeIf(al, at, at, instr);
+  inline void Deoptimize(LEnvironment* environment) {
+    DeoptimizeIf(al, environment, at, at);
   }
 
   void AddToTranslation(Translation* translation,
