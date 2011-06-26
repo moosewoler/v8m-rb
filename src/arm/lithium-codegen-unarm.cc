@@ -1178,7 +1178,7 @@ void LCodeGen::DoDivI(LDivI* instr) {
   __ b(&done);
 
   __ bind(&deoptimize);
-  Deoptimize(instr);
+  Deoptimize(instr->environment());
   __ bind(&done);
 }
 
@@ -1364,7 +1364,7 @@ void LCodeGen::DoShiftI(LShiftI* instr) {
         __ mov(result, Operand(result, ASR, scratch));
         break;
       case Token::SHR:
-         __ mov(result, Operand(result, LSR, scratch));
+        __ mov(result, Operand(result, LSR, scratch));
         if (instr->can_deopt()) {
           __ cmp(result, Operand(0));
           DeoptimizeIf(mi, instr->environment());
@@ -1516,7 +1516,6 @@ void LCodeGen::DoValueOf(LValueOf* instr) {
 void LCodeGen::DoBitNotI(LBitNotI* instr) {
   LOperand* input = instr->InputAt(0);
   ASSERT(input->Equals(instr->result()));
-  // __ mvn(ToRegister(input), Operand(ToRegister(input)));
   __ not_(ToRegister(input), ToRegister(input));
 
 }
@@ -1728,27 +1727,28 @@ void LCodeGen::DoBranch(LBranch* instr) {
       __ b(eq, true_label);
 
       // Test double values. Zero and NaN are false.
+      Register scratch = scratch0();
+#ifdef MIPS_STUB
+      // TODO(plind): I think this is optimization, and stub below
+      // can handle everything.
+#else
       Label call_stub;
       DoubleRegister dbl_scratch = d0;
-      Register scratch = scratch0();
       __ ldr(scratch, FieldMemOperand(reg, HeapObject::kMapOffset));
       __ LoadRoot(ip, Heap::kHeapNumberMapRootIndex);
       __ cmp(scratch, Operand(ip));
       __ b(ne, &call_stub);
-#ifdef MIPS_STUB
-      RuntimeAbort;
-#else
       __ sub(ip, reg, Operand(kHeapObjectTag));
       __ vldr(dbl_scratch, ip, HeapNumber::kValueOffset);
       __ VFPCompareAndLoadFlags(dbl_scratch, 0.0, scratch);
       __ tst(scratch, Operand(kVFPZConditionFlagBit | kVFPVConditionFlagBit));
       __ b(ne, false_label);
       __ b(true_label);
-#endif
 
+      __ bind(&call_stub);
+#endif
       // The conversion stub doesn't cause garbage collections so it's
       // safe to not record a safepoint after the call.
-      __ bind(&call_stub);
       ToBooleanStub stub(reg);
       RegList saved_regs = (kJSCallerSaved | kCalleeSaved) & ~scratch.bit();
       __ MultiPush(saved_regs);
@@ -4767,7 +4767,7 @@ void LCodeGen::DoLazyBailout(LLazyBailout* instr) {
 
 
 void LCodeGen::DoDeoptimize(LDeoptimize* instr) {
-  Deoptimize(instr);
+  Deoptimize(instr->environment());
 }
 
 
@@ -4832,8 +4832,6 @@ void LCodeGen::DoOsrEntry(LOsrEntry* instr) {
   ASSERT(osr_pc_offset_ == -1);
   osr_pc_offset_ = masm()->pc_offset();
 }
-
-
 
 
 #undef __

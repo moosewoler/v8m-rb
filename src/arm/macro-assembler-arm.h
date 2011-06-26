@@ -989,12 +989,12 @@ class MacroAssembler: public Assembler {
                            const char* message);
 
   // Macros to facilitate Arm-->Mips port:
-  void Branch(Condition cond, Register src1, const Operand& src2, Label* L) {
+  void Branch(Label* L, Condition cond, Register src1, const Operand& src2) {
     cmp(src1, src2);
-    b(cond, L);
+    b(L, cond);
   }
-  void Branch(Condition cond, Register src1, Register src2, Label* L) {
-    Branch(cond, src1, Operand(src2), L);
+  void Branch(Label* L, Condition cond, Register src1, Register src2) {
+    Branch(L, cond, src1, Operand(src2));
   }
 
   // ---------------------------------------------------------------------------
