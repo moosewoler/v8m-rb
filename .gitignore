@@ -33,3 +33,7 @@ shell_g
 TAGS
 Makefile
 *.Makefile
+# Duane's temp changes:
+/src/arm/lithium-codegen-arm.cc
+/src/mips/lithium-codegen-mips.cc
+*.[0-9]
