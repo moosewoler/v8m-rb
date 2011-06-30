@@ -27,7 +27,7 @@ ARM_TO_MIPS_IMM = {
   'eor' : ('Xor' , 'xor_', 'xori' ),
   'add' : ('Addu', 'addu', 'addiu'),
   'sub' : ('Subu', 'subu', 'addiu'),
-  'mov' : ('Mov' , 'mov',  'li'   ),
+  'mov' : ('li'  , 'mov',  'li'   ),
   'not_': ('Not?', 'not_', 'noti?'),  # only need register case
   }
 
@@ -43,6 +43,7 @@ CC_TO_BGEZ = {
 UNSIGNED_COMPARES = {'lo': 'lt', 'ls': 'le', 'hs': 'ge', 'hi': 'gt'} 
 
 COMMON_REGNAMES = set(['at', 'fp', 'sp', 'cp', 'a0', 'a1', 'a2', 'a3',
+                       'zero_reg',
                        'left', 'right', 'reg',
                        'left_reg', 'right_reg', 'input_reg',])
 
@@ -226,13 +227,11 @@ def process_line(fi, fo, line1):
                % (indent, mips_op, reg1, operand2, comment))
     elif op1 == 'vmov':
       indent, reg1, reg2, comment = iparts1
-      if reg1.endswith('.low()') or likely_int_reg(reg2):
+      if reg1.endswith('.high()') or reg1.endswith('.low()') or likely_int_reg(reg2):
         mips_op = 'mtc1'
         reg1, reg2 = reg2, reg1
-      elif reg2.endswith('.low()'):
+      elif reg2.endswith('.high()') or reg2.endswith('.low()') or likely_int_reg(reg1):
         mips_op = 'mfc1'
-      elif reg2.endswith('.high()'):
-        mips_op = 'mfhc1'
       else:
         mips_op = 'mov_d'
       line1 = ('%s__ %s(%s, %s);%s\n'
@@ -278,12 +277,12 @@ def process_line(fi, fo, line1):
                    % (indent, unsigned, reg1, imm_val, comment,
                       indent, b_op, label))
     elif op1 == 'Branch':
-      indent, cond, reg1, operand2, label, comment = iparts1
+      indent, label, cond, reg1, operand2, comment = iparts1
       if operand2 == 'Operand(zero_reg)':
         if   cond == 'pl':  cond = 'ge'
         elif cond == 'mi':  cond = 'lt'
       line1 = ('%s__ Branch(%s, %s, %s, %s);%s\n'
-               % (indent, cond, reg1, operand2, label, comment))
+               % (indent, label, cond, reg1, operand2, comment))
     elif line1.startswith('#include '):
       line1 = line1.replace('arm', 'mips')
     fo.write(line1)

@@ -3892,8 +3892,6 @@ void JSEntryStub::GenerateBody(MacroAssembler* masm, bool is_construct) {
 // Inlined call site patching is a crankshaft-specific feature that is not
 // implemented on MIPS.
 void InstanceofStub::Generate(MacroAssembler* masm) {
-  // This is a crankshaft-specific feature that has not been implemented yet.
-  ASSERT(!HasCallSiteInlineCheck());
   // Call site inlining and patching implies arguments in registers.
   ASSERT(HasArgsInRegisters() || !HasCallSiteInlineCheck());
   // ReturnTrueFalse is only implemented for inlined call sites.

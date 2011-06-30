@@ -32,16 +32,17 @@
 #include "code-stubs.h"
 #include "stub-cache.h"
 
-#define MIPS_STUB
 //#define NotYet V8_Fatal(__FILE__, __LINE__, "not yet implemented")
 #define NotYet Abort("Unimplemented: %s line %d", __func__, __LINE__)
 
 #ifdef V8_TARGET_ARCH_MIPS
+#define MIPS_STUB
 #define c_rval_reg v0
 #define transcend_rval_reg f4
 //#define RuntimeAbort __ cvt_w_s(f0, f0)
 #define RuntimeAbort Abort("Unimplemented: %s line %d", __func__, __LINE__)
 #else
+//#define MIPS_STUB  // comment out to get full crankshaft, on Arm only
 #define c_rval_reg r0
 #define transcend_rval_reg d2
 //#define RuntimeAbort __ bkpt(12345)
@@ -1162,7 +1163,7 @@ void LCodeGen::DoDivI(LDivI* instr) {
   __ b(&done);
   __ bind(&more3);
 
-  // Call the stub. The numbers in r0 and r1 have
+  // Call the stub. The numbers in left and right have
   // to be tagged to Smis. If that is not possible, deoptimize.
   DeferredDivI* deferred = new DeferredDivI(this, instr);
 
@@ -1172,7 +1173,7 @@ void LCodeGen::DoDivI(LDivI* instr) {
   __ b(deferred->entry());
   __ bind(deferred->exit());
 
-  // If the result in r0 is a Smi, untag it, else deoptimize.
+  // If the value in result is a Smi, untag it, else deoptimize.
   __ JumpIfNotSmi(result, &deoptimize);
   __ SmiUntag(result);
   __ b(&done);
@@ -1188,6 +1189,7 @@ void LCodeGen::DoDeferredBinaryOpStub(LTemplateInstruction<1, 2, T>* instr,
                                       Token::Value op) {
   Register left = ToRegister(instr->InputAt(0));
   Register right = ToRegister(instr->InputAt(1));
+  Register result = ToRegister(instr->result());
 
   PushSafepointRegistersScope scope(this, Safepoint::kWithRegistersAndDoubles);
   // Move left to r1 and right to r0 for the stub call.
@@ -1210,8 +1212,7 @@ void LCodeGen::DoDeferredBinaryOpStub(LTemplateInstruction<1, 2, T>* instr,
                                          0,
                                          Safepoint::kNoDeoptimizationIndex);
   // Overwrite the stored value of c_rval_reg with the result of the stub.
-  // TODO(plind): validate this is correct.....
-  __ StoreToSafepointRegistersAndDoublesSlot(c_rval_reg, c_rval_reg);
+  __ StoreToSafepointRegistersAndDoublesSlot(c_rval_reg, result);
 }
 
 
@@ -2318,16 +2319,17 @@ void LCodeGen::DoInstanceOf(LInstanceOf* instr) {
   Label true_label, done;
   ASSERT(ToRegister(instr->InputAt(0)).is(r0));  // Object is in r0.
   ASSERT(ToRegister(instr->InputAt(1)).is(r1));  // Function is in r1.
-
+  Register result = ToRegister(instr->result());
+  
   InstanceofStub stub(InstanceofStub::kArgsInRegisters);
   CallCode(stub.GetCode(), RelocInfo::CODE_TARGET, instr);
 
-  __ cmp(r0, Operand(0));
+  __ cmp(c_rval_reg, Operand(0));
   __ b(eq, &true_label);
-  __ mov(r0, Operand(factory()->false_value()));
+  __ mov(result, Operand(factory()->false_value()));
   __ b(&done);
   __ bind(&true_label);
-  __ mov(r0, Operand(factory()->true_value()));
+  __ mov(result, Operand(factory()->true_value()));
   __ bind(&done);
 }
 
@@ -2358,7 +2360,6 @@ void LCodeGen::DoInstanceOfKnownGlobal(LInstanceOfKnownGlobal* instr) {
   Register result = ToRegister(instr->result());
 
   ASSERT(object.is(r0));
-  ASSERT(result.is(c_rval_reg));
 
   // A Smi is not instance of anything.
   __ JumpIfSmi(object, &false_result);
@@ -2417,7 +2418,6 @@ void LCodeGen::DoDeferredLInstanceOfKnownGlobal(LInstanceOfKnownGlobal* instr,
   RuntimeAbort;  // patching of inlined stubs not yet enabled for Mips
 #endif
   Register result = ToRegister(instr->result());
-  ASSERT(result.is(c_rval_reg));
 
   InstanceofStub::Flags flags = InstanceofStub::kNoFlags;
   flags = static_cast<InstanceofStub::Flags>(
@@ -2451,7 +2451,7 @@ void LCodeGen::DoDeferredLInstanceOfKnownGlobal(LInstanceOfKnownGlobal* instr,
                   RECORD_SAFEPOINT_WITH_REGISTERS_AND_NO_ARGUMENTS);
   // Put the result value into the result register slot and
   // restore all registers.
-  __ StoreToSafepointRegisterSlot(result, result);
+  __ StoreToSafepointRegisterSlot(c_rval_reg, result);
 }
 
 
@@ -3113,6 +3113,7 @@ void LCodeGen::CallKnownFunction(Handle<JSFunction> function,
 
 void LCodeGen::DoCallConstantFunction(LCallConstantFunction* instr) {
   ASSERT(ToRegister(instr->result()).is(c_rval_reg));
+  //TODO(duanes): setting r0 here is likely pointless:
   if (!r0.is(c_rval_reg))
     __ mov(r0, c_rval_reg);
   __ mov(r1, Operand(instr->function()));
@@ -3169,8 +3170,8 @@ void LCodeGen::DoDeferredMathAbsTaggedHeapNumber(LUnaryMathOperation* instr) {
 
     CallRuntimeFromDeferred(Runtime::kAllocateHeapNumber, 0, instr);
     // Set the pointer to the new heap number in tmp.
-    if (!tmp1.is(r0))
-      __ mov(tmp1, r0);
+    if (!tmp1.is(c_rval_reg))
+      __ mov(tmp1, c_rval_reg);
     // Restore input_reg after call to runtime.
     __ LoadFromSafepointRegisterSlot(input, input);
     __ ldr(exponent, FieldMemOperand(input, HeapNumber::kExponentOffset));
@@ -3255,7 +3256,6 @@ void LCodeGen::DoMathFloor(LUnaryMathOperation* instr) {
                      scratch2);
   DeoptimizeIf(ne, instr->environment());
 
-  // Move the result back to general purpose register r0.
   __ vmov(result, single_scratch);
 
   if (instr->hydrogen()->CheckFlag(HValue::kBailoutOnMinusZero)) {
@@ -3502,6 +3502,7 @@ void LCodeGen::DoUnaryMathOperation(LUnaryMathOperation* instr) {
 
 void LCodeGen::DoInvokeFunction(LInvokeFunction* instr) {
   ASSERT(ToRegister(instr->function()).is(r1));
+  ASSERT(ToRegister(instr->result()).is(c_rval_reg));
   ASSERT(instr->HasPointerMap());
   ASSERT(instr->HasDeoptimizationEnvironment());
   LPointerMap* pointers = instr->pointer_map();
@@ -3582,6 +3583,7 @@ void LCodeGen::DoCallNew(LCallNew* instr) {
 
 
 void LCodeGen::DoCallRuntime(LCallRuntime* instr) {
+  ASSERT(ToRegister(instr->result()).is(c_rval_reg));
   CallRuntime(instr->function(), instr->arity(), instr);
 }
 
@@ -3745,6 +3747,7 @@ void LCodeGen::DoStoreKeyedGeneric(LStoreKeyedGeneric* instr) {
 
 
 void LCodeGen::DoStringAdd(LStringAdd* instr) {
+  ASSERT(ToRegister(instr->result()).is(c_rval_reg));
   __ push(ToRegister(instr->left()));
   __ push(ToRegister(instr->right()));
   StringAddStub stub(NO_STRING_CHECK_IN_STUB);
@@ -3883,10 +3886,10 @@ void LCodeGen::DoDeferredStringCharCodeAt(LStringCharCodeAt* instr) {
   }
   CallRuntimeFromDeferred(Runtime::kStringCharCodeAt, 2, instr);
   if (FLAG_debug_code) {
-    __ AbortIfNotSmi(r0);
+    __ AbortIfNotSmi(c_rval_reg);
   }
-  __ SmiUntag(r0);
-  __ StoreToSafepointRegisterSlot(r0, result);
+  __ SmiUntag(c_rval_reg);
+  __ StoreToSafepointRegisterSlot(c_rval_reg, result);
 }
 
 
@@ -3934,7 +3937,7 @@ void LCodeGen::DoDeferredStringCharFromCode(LStringCharFromCode* instr) {
   __ SmiTag(char_code);
   __ push(char_code);
   CallRuntimeFromDeferred(Runtime::kCharFromCode, 1, instr);
-  __ StoreToSafepointRegisterSlot(r0, result);
+  __ StoreToSafepointRegisterSlot(c_rval_reg, result);
 }
 
 
@@ -4063,7 +4066,7 @@ void LCodeGen::DoDeferredNumberTagD(LNumberTagD* instr) {
 
   PushSafepointRegistersScope scope(this, Safepoint::kWithRegisters);
   CallRuntimeFromDeferred(Runtime::kAllocateHeapNumber, 0, instr);
-  __ StoreToSafepointRegisterSlot(r0, reg);
+  __ StoreToSafepointRegisterSlot(c_rval_reg, reg);
 }
 
 
@@ -4489,6 +4492,7 @@ void LCodeGen::DoCheckPrototypeMaps(LCheckPrototypeMaps* instr) {
 
 
 void LCodeGen::DoArrayLiteral(LArrayLiteral* instr) {
+  ASSERT(ToRegister(instr->result()).is(c_rval_reg));
   __ ldr(r3, MemOperand(fp, JavaScriptFrameConstants::kFunctionOffset));
   __ ldr(r3, FieldMemOperand(r3, JSFunction::kLiteralsOffset));
   __ mov(r2, Operand(Smi::FromInt(instr->hydrogen()->literal_index())));
@@ -4560,13 +4564,13 @@ void LCodeGen::DoRegExpLiteral(LRegExpLiteral* instr) {
   __ b(ne, &materialized);
 
   // Create regexp literal using runtime function
-  // Result will be in r0.
+  // Result will be in c_rval_reg.
   __ mov(r6, Operand(Smi::FromInt(instr->hydrogen()->literal_index())));
   __ mov(r5, Operand(instr->hydrogen()->pattern()));
   __ mov(r4, Operand(instr->hydrogen()->flags()));
   __ Push(r7, r6, r5, r4);
   CallRuntime(Runtime::kMaterializeRegExpLiteral, 4, instr);
-  __ mov(r1, r0);
+  __ mov(r1, c_rval_reg);
 
   __ bind(&materialized);
   int size = JSRegExp::kSize + JSRegExp::kInObjectFieldCount * kPointerSize;
@@ -4600,6 +4604,7 @@ void LCodeGen::DoRegExpLiteral(LRegExpLiteral* instr) {
 void LCodeGen::DoFunctionLiteral(LFunctionLiteral* instr) {
   // Use the fast case closure allocation code that allocates in new
   // space for nested functions that don't need literals cloning.
+  ASSERT(ToRegister(instr->result()).is(c_rval_reg));
   Handle<SharedFunctionInfo> shared_info = instr->shared_info();
   bool pretenure = instr->hydrogen()->pretenure();
   if (!pretenure && shared_info->num_literals() == 0) {
@@ -4805,6 +4810,7 @@ void LCodeGen::DoDeleteProperty(LDeleteProperty* instr) {
 void LCodeGen::DoIn(LIn* instr) {
   Register obj = ToRegister(instr->object());
   Register key = ToRegister(instr->key());
+  ASSERT(ToRegister(instr->result()).is(c_rval_reg));
   __ Push(key, obj);
   ASSERT(instr->HasPointerMap() && instr->HasDeoptimizationEnvironment());
   LPointerMap* pointers = instr->pointer_map();

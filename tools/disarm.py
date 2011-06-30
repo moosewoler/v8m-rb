@@ -117,15 +117,15 @@ def process_line(fi, fo, line1):
           indent, reg1, operand2, comment1 = iparts1
           indent2, cond, label, comment2 = iparts2
           line1 = '%s__ Branch(%s, %s, %s, %s);%s\n' % (
-                  indent, cond, reg1, operand2, label, comment1+comment2)
+                  indent, label, cond, reg1, operand2, comment1+comment2)
           line2 = fi.readline()
       elif op1 == 'tst' and op2 == 'b':
           indent, reg1, operand2, comment1 = iparts1
           indent2, cond, label, comment2 = iparts2
           line1 = ('%s__ and_(ip, %s, %s);%s\n'
-                   '%s__ Branch(%s, ip, Operand(0), %s);%s\n'
+                   '%s__ Branch(%s, %s, ip, Operand(0));%s\n'
                    % (indent, reg1, operand2, comment1,
-                      indent, cond, label, comment2))
+                      indent, label, cond, comment2))
           line2 = fi.readline()
       elif op1 == 'cmp' and func2 == 'DeoptimizeIf':
           indent, reg1, operand2, comment1 = iparts1
@@ -134,7 +134,7 @@ def process_line(fi, fo, line1):
             print 'error: expecting instr->environment() in', repr(line2[:-1])
           if cond in ('mi', 'pl') and operand2 == 'Operand(0)':
             cond = 'lt' if cond == 'mi' else 'ge'
-          line1 = '%sDeoptimizeIf(%s, %s, %s, instr);%s\n' % (
+          line1 = '%sDeoptimizeIf(%s, instr->environment(), %s, %s);%s\n' % (
                   indent, cond, reg1, operand2, comment1+comment2)
           line2 = fi.readline()
       elif op1 == 'tst' and func2 == 'DeoptimizeIf':
@@ -142,7 +142,7 @@ def process_line(fi, fo, line1):
           indent2, cond, env, comment2 = fparts2
           assert env == 'instr->environment()'
           line1 = ('%s__ and_(ip, %s, %s);%s\n'
-                   '%sDeoptimizeIf(%s, ip, Operand(0), instr);%s\n'
+                   '%sDeoptimizeIf(%s, instr->environment(), ip, Operand(0));%s\n'
                    % (indent, reg1, operand2, comment1,
                       indent, cond, comment2))
           line2 = fi.readline()
