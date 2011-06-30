@@ -7,6 +7,12 @@
 # The converted source is a prelude to semi-mechanically producing a Mips
 # version of lithium-codegen using Mips opcodes.
 
+import shutil
+
+SRC   = 'src/arm/lithium-codegen-unarm.cc'
+GEN   = 'src/arm/lithium-codegen-arm-generated.cc'
+BUILD = 'src/arm/lithium-codegen-arm.cc'
+
 SHIFT_OPS = ['LSL', 'LSR', 'ASR']
 
 def get_op(line):
@@ -170,10 +176,16 @@ def process_line(fi, fo, line1):
     return line2
 
 def main():
-  fi = open('src/arm/lithium-codegen-unarm.cc')
-  fo = open('src/arm/lithium-codegen-arm.cc', 'w')
+  fi = open(SRC)
+  fo = open(GEN, 'w')
+  fo.write('// File %s was mechanically generated\n'
+           '// from %s by tools/disarm.py.\n'
+           '// Do not make permanent manual edits here.\n\n'
+           % (GEN, SRC))
   line1 = fi.readline()
   while line1:
     line1 = process_line(fi, fo, line1)
-
+  fo.close();
+  shutil.copy2(GEN, BUILD)
+  
 main()

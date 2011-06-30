@@ -7,6 +7,12 @@
 # removed by manual edit changes (to arm/lithium-codegen-unarm.cc)
 # and then by mechanical changes via tools/disarm.py.
 
+import shutil
+
+SRC   = 'src/arm/lithium-codegen-arm-generated.cc'
+GEN   = 'src/mips/lithium-codegen-mips-generated.cc'
+BUILD = 'src/mips/lithium-codegen-mips.cc'
+
 ARM_TO_MIPS = {
   'ldr' : 'lw'  ,                  'str' : 'sw' ,
   'ldrh': 'lhu' , 'ldrsh': 'lh'  , 'strh': 'sh' ,
@@ -290,10 +296,15 @@ def process_line(fi, fo, line1):
     return line2
 
 def main():
-  fi = open('src/arm/lithium-codegen-arm.cc')
-  fo = open('src/mips/lithium-codegen-mips-generated.cc', 'w')
+  fi = open(SRC)
+  fo = open(GEN, 'w')
+  fo.write('// File %s was mechanically generated\n'
+           '// from %s by tools/arm2mips.py.\n\n'
+           % (GEN, SRC))
   line1 = fi.readline()
   while line1:
     line1 = process_line(fi, fo, line1)
+  fo.close()
+  shutil.copy2(GEN, BUILD)
 
 main()
