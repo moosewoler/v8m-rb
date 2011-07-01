@@ -9,8 +9,8 @@
 
 import shutil
 
-SRC   = 'src/arm/lithium-codegen-arm-generated.cc'
-GEN   = 'src/mips/lithium-codegen-mips-generated.cc'
+SRC   = 'src/arm/lithium-codegen-arm-generated.cc_'
+GEN   = 'src/mips/lithium-codegen-mips-generated.cc_'
 BUILD = 'src/mips/lithium-codegen-mips.cc'
 
 ARM_TO_MIPS = {
@@ -295,16 +295,19 @@ def process_line(fi, fo, line1):
     line2 = fi.readline()
     return line2
 
-def main():
-  fi = open(SRC)
-  fo = open(GEN, 'w')
+def transform(src_in, src_out):
+  fi = open(src_in)
+  fo = open(src_out, 'w')
   fo.write('// File %s was mechanically generated\n'
            '// from %s by tools/arm2mips.py.\n\n'
-           % (GEN, SRC))
+           % (src_out, src_in))
   line1 = fi.readline()
   while line1:
     line1 = process_line(fi, fo, line1)
   fo.close()
-  shutil.copy2(GEN, BUILD)
+
+def main():
+  transform(SRC, GEN)
+  # shutil.copy2(GEN, BUILD)
 
 main()
