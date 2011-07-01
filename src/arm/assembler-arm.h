@@ -818,23 +818,6 @@ class Assembler : public AssemblerBase {
 
 
   // pseudo-ARM instructions added to facilitate Arm-->Mips port:
-  // integer arithmetic with overflow detection via condition code:
-  void subv(Register dst, Register src1, const Operand& src2) {
-    sub(dst, src1, src2, SetCC);
-  }
-  void subv(Register dst, Register src1, Register src2) {
-    sub(dst, src1, Operand(src2), SetCC);
-  }
-  void rsbv(Register dst, Register src1, const Operand& src2) {
-    rsb(dst, src1, src2, SetCC);
-  }
-  void addv(Register dst, Register src1, const Operand& src2) {
-    add(dst, src1, src2, SetCC);
-  }
-  void addv(Register dst, Register src1, Register src2) {
-    add(dst, src1, Operand(src2), SetCC);
-  }
-
   // shift instructions:
   void lsl(Register dst, Register src1, int src2) {
     mov(dst, Operand(src1, LSL, src2));

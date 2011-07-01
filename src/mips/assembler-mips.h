@@ -779,7 +779,6 @@ class Assembler : public AssemblerBase {
 
   void mtc1(Register rt, FPURegister fs);
   void mfc1(Register rt, FPURegister fs);
-  void mfhc1(Register rt, FPURegister fs);
 
   void ctc1(Register rt, FPUControlRegister fs);
   void cfc1(Register rt, FPUControlRegister fs);
