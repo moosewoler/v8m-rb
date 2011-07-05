@@ -1249,6 +1249,17 @@ Condition LCodeGen::TokenToCondition(Token::Value op, bool is_unsigned) {
 }
 
 
+void LCodeGen::TrueFalseRoot(Register result, Label* is_true) {
+  Label done;
+  // fall-through case is false
+  __ LoadRoot(result, Heap::kFalseValueRootIndex);
+  __ Branch(&done);
+  __ bind(is_true);
+  __ LoadRoot(result, Heap::kTrueValueRootIndex);
+  __ bind(&done);
+}
+
+
 void LCodeGen::EmitCmpI(LOperand* left, LOperand* right) {
   Abort("Unimplemented: %s (line %d)", __func__, __LINE__);
 }
@@ -1409,13 +1420,12 @@ void LCodeGen::DoIsNullAndBranch(LIsNullAndBranch* instr) {
 }
 
 
-Condition LCodeGen::EmitIsObject(Register input,
-                                 Register temp1,
-                                 Register temp2,
-                                 Label* is_not_object,
-                                 Label* is_object) {
+void LCodeGen::EmitIsObject(Register input,
+                            Register temp1,
+                            Register temp2,
+                            Label* is_not_object,
+                            Label* is_object) {
   Abort("Unimplemented: %s (line %d)", __func__, __LINE__);
-  return al;
 }
 
 
@@ -2425,7 +2435,7 @@ void LCodeGen::DoSmiUntag(LSmiUntag* instr) {
 
 void LCodeGen::EmitNumberUntagD(Register input_reg,
                                 DoubleRegister result_reg,
-                                LEnvironment* env) {
+                                LInstruction* instr) {
   Abort("Unimplemented: %s (line %d)", __func__, __LINE__);
 }
 
@@ -2790,37 +2800,26 @@ void LCodeGen::DoTypeofIsAndBranch(LTypeofIsAndBranch* instr) {
   Label* true_label = chunk_->GetAssemblyLabel(true_block);
   Label* false_label = chunk_->GetAssemblyLabel(false_block);
 
-  Register cmp1 = no_reg;
-  Operand cmp2 = Operand(no_reg);
-
   Condition final_branch_condition = EmitTypeofIs(true_label,
                                                   false_label,
                                                   input,
-                                                  instr->type_literal(),
-                                                  cmp1,
-                                                  cmp2);
-
-  ASSERT(cmp1.is_valid());
-  ASSERT(!cmp2.is_reg() || cmp2.rm().is_valid());
-
-  EmitBranch(true_block, false_block, final_branch_condition, cmp1, cmp2);
+                                                  instr->type_literal());
+  EmitBranch(true_block, false_block, final_branch_condition, at, Operand(zero_reg));
 }
 
 
 Condition LCodeGen::EmitTypeofIs(Label* true_label,
                                  Label* false_label,
                                  Register input,
-                                 Handle<String> type_name,
-                                 Register& cmp1,
-                                 Operand& cmp2) {
+                                 Handle<String> type_name) {
   Condition final_branch_condition = kNoCondition;
   Register scratch = scratch0();
   if (type_name->Equals(heap()->number_symbol())) {
     __ JumpIfSmi(input, true_label);
     __ lw(input, FieldMemOperand(input, HeapObject::kMapOffset));
     __ LoadRoot(at, Heap::kHeapNumberMapRootIndex);
-    cmp1 = input;
-    cmp2 = Operand(at);
+    __ subu(at, at, input);
+    // cmp(at, Operand(zero_reg));
     final_branch_condition = eq;
 
   } else if (type_name->Equals(heap()->string_symbol())) {
@@ -2833,23 +2832,28 @@ Condition LCodeGen::EmitTypeofIs(Label* true_label,
               Operand(FIRST_NONSTRING_TYPE));
     __ lbu(at, FieldMemOperand(input, Map::kBitFieldOffset));
     __ And(at, at, 1 << Map::kIsUndetectable);
-    cmp1 = at;
-    cmp2 = Operand(zero_reg);
+    // cmp(at, Operand(zero_reg));
     final_branch_condition = eq;
 
   } else if (type_name->Equals(heap()->boolean_symbol())) {
+    // CompareRoot(input, Heap::kTrueValueRootIndex);
+    ASSERT(!input.is(at));
     __ LoadRoot(at, Heap::kTrueValueRootIndex);
     __ Branch(USE_DELAY_SLOT,
               true_label,
               eq,
               at,
               Operand(input));
+    // CompareRoot(input, Heap::kFalseValueRootIndex);
+    ASSERT(!input.is(at));
     __ LoadRoot(at, Heap::kFalseValueRootIndex);
-    cmp1 = at;
-    cmp2 = Operand(input);
-    final_branch_condition = eq;
+    __ Branch(true_label, eq, input, at);
+    __ Branch(false_label);
+    final_branch_condition = kNoCondition;
 
   } else if (type_name->Equals(heap()->undefined_symbol())) {
+    // CompareRoot(input, Heap::kUndefinedValueRootIndex);
+    ASSERT(!input.is(at));
     __ LoadRoot(at, Heap::kUndefinedValueRootIndex);
     __ Branch(USE_DELAY_SLOT,
               true_label,
@@ -2861,19 +2865,20 @@ Condition LCodeGen::EmitTypeofIs(Label* true_label,
     __ lw(input, FieldMemOperand(input, HeapObject::kMapOffset));
     __ lbu(at, FieldMemOperand(input, Map::kBitFieldOffset));
     __ And(at, at, 1 << Map::kIsUndetectable);
-    cmp1 = at;
-    cmp2 = Operand(zero_reg);
+    // cmp(at, Operand(zero_reg));
     final_branch_condition = ne;
 
   } else if (type_name->Equals(heap()->function_symbol())) {
     __ JumpIfSmi(input, false_label);
     __ GetObjectType(input, input, scratch);
-    cmp1 = scratch;
-    cmp2 = Operand(FIRST_CALLABLE_SPEC_OBJECT_TYPE);
-    final_branch_condition = ge;
+    __ Branch(true_label, ge, scratch, Operand(FIRST_CALLABLE_SPEC_OBJECT_TYPE));
+    __ Branch(false_label);
+    final_branch_condition = kNoCondition;
 
   } else if (type_name->Equals(heap()->object_symbol())) {
     __ JumpIfSmi(input, false_label);
+    // CompareRoot(input, Heap::kNullValueRootIndex);
+    ASSERT(!input.is(at));
     __ LoadRoot(at, Heap::kNullValueRootIndex);
     __ Branch(USE_DELAY_SLOT,
               true_label,
@@ -2885,6 +2890,7 @@ Condition LCodeGen::EmitTypeofIs(Label* true_label,
               lt,
               scratch,
               Operand(FIRST_NONCALLABLE_SPEC_OBJECT_TYPE));
+    // CompareInstanceType(input, scratch, LAST_NONCALLABLE_SPEC_OBJECT_TYPE);
     __ lbu(scratch, FieldMemOperand(input, Map::kInstanceTypeOffset));
     __ Branch(false_label,
               gt,
@@ -2893,14 +2899,12 @@ Condition LCodeGen::EmitTypeofIs(Label* true_label,
     // Check for undetectable objects => false.
     __ lbu(at, FieldMemOperand(input, Map::kBitFieldOffset));
     __ And(at, at, 1 << Map::kIsUndetectable);
-    cmp1 = at;
-    cmp2 = Operand(zero_reg);
+    // cmp(at, Operand(zero_reg));
     final_branch_condition = eq;
 
   } else {
-    final_branch_condition = ne;
+    final_branch_condition = kNoCondition;
     __ Branch(false_label);
-    // A dead branch instruction will be generated after this point.
   }
 
   return final_branch_condition;
