@@ -9,9 +9,9 @@
 
 import shutil
 
-SRC   = 'src/arm/lithium-codegen-arm-generated.cc_'
-GEN   = 'src/mips/lithium-codegen-mips-generated.cc_'
-BUILD = 'src/mips/lithium-codegen-mips.cc'
+SRC   = 'src/arm/lithium-codegen-arm-generated.cc'
+GEN   = 'src/mips/lithium-codegen-mips-generated.cc'
+#BUILD = 'src/mips/lithium-codegen-mips.cc'
 
 ARM_TO_MIPS = {
   'ldr' : 'lw'  ,                  'str' : 'sw' ,

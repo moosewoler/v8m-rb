@@ -10,8 +10,8 @@
 import shutil
 
 SRC   = 'src/arm/lithium-codegen-unarm.cc'
-GEN   = 'src/arm/lithium-codegen-arm-generated.cc_'
-BUILD = 'src/arm/lithium-codegen-arm.cc'
+GEN   = 'src/arm/lithium-codegen-arm-generated.cc'
+#BUILD = 'src/arm/lithium-codegen-arm.cc'
 
 SHIFT_OPS = ['LSL', 'LSR', 'ASR']
 
