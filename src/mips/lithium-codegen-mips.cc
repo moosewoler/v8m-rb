@@ -1093,6 +1093,9 @@ void LCodeGen::EmitBranch(int left_block, int right_block,
   int next_block = GetNextEmittedBlock(current_block_);
   right_block = chunk_->LookupDestination(right_block);
   left_block = chunk_->LookupDestination(left_block);
+
+  if (cond == kNoCondition)
+    return;
   if (right_block == left_block) {
     EmitGoto(left_block);
   } else if (left_block == next_block) {
