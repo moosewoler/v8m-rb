@@ -24,6 +24,7 @@ ARM_TO_MIPS = {
   'vcvt_s32_f64': 'cvt_w_d',
   'vcvt_f32_f64': 'cvt_s_d',
   'b': 'Branch',
+  'ubfx': 'Ext',
   }
 
 ARM_TO_MIPS_IMM = {

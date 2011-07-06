@@ -1,4 +1,4 @@
-// Copyright 2006-2009 the V8 project authors. All rights reserved.
+// Copyright 2011 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -105,7 +105,8 @@ uint64_t OS::CpuFeaturesImpliedByPlatform() {
 
 
 int OS::ActivationFrameAlignment() {
-  return STACK_ALIGN;
+  // GCC generates code that requires 16 byte alignment such as movdqa.
+  return Max(STACK_ALIGN, 16);
 }
 
 
@@ -380,17 +381,15 @@ class Thread::PlatformData : public Malloced {
   pthread_t thread_;  // Thread handle for pthread.
 };
 
-Thread::Thread(Isolate* isolate, const Options& options)
+Thread::Thread(const Options& options)
     : data_(new PlatformData()),
-      isolate_(isolate),
       stack_size_(options.stack_size) {
   set_name(options.name);
 }
 
 
-Thread::Thread(Isolate* isolate, const char* name)
+Thread::Thread(const char* name)
     : data_(new PlatformData()),
-      isolate_(isolate),
       stack_size_(0) {
   set_name(name);
 }

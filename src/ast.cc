@@ -337,6 +337,59 @@ bool BinaryOperation::ResultOverwriteAllowed() {
 }
 
 
+bool CompareOperation::IsLiteralCompareTypeof(Expression** expr,
+                                              Handle<String>* check) {
+  if (op_ != Token::EQ && op_ != Token::EQ_STRICT) return false;
+
+  UnaryOperation* left_unary = left_->AsUnaryOperation();
+  UnaryOperation* right_unary = right_->AsUnaryOperation();
+  Literal* left_literal = left_->AsLiteral();
+  Literal* right_literal = right_->AsLiteral();
+
+  // Check for the pattern: typeof <expression> == <string literal>.
+  if (left_unary != NULL && left_unary->op() == Token::TYPEOF &&
+      right_literal != NULL && right_literal->handle()->IsString()) {
+    *expr = left_unary->expression();
+    *check = Handle<String>::cast(right_literal->handle());
+    return true;
+  }
+
+  // Check for the pattern: <string literal> == typeof <expression>.
+  if (right_unary != NULL && right_unary->op() == Token::TYPEOF &&
+      left_literal != NULL && left_literal->handle()->IsString()) {
+    *expr = right_unary->expression();
+    *check = Handle<String>::cast(left_literal->handle());
+    return true;
+  }
+
+  return false;
+}
+
+
+bool CompareOperation::IsLiteralCompareUndefined(Expression** expr) {
+  if (op_ != Token::EQ_STRICT) return false;
+
+  UnaryOperation* left_unary = left_->AsUnaryOperation();
+  UnaryOperation* right_unary = right_->AsUnaryOperation();
+
+  // Check for the pattern: <expression> === void <literal>.
+  if (right_unary != NULL && right_unary->op() == Token::VOID &&
+      right_unary->expression()->AsLiteral() != NULL) {
+    *expr = left_;
+    return true;
+  }
+
+  // Check for the pattern: void <literal> === <expression>.
+  if (left_unary != NULL && left_unary->op() == Token::VOID &&
+      left_unary->expression()->AsLiteral() != NULL) {
+    *expr = right_;
+    return true;
+  }
+
+  return false;
+}
+
+
 // ----------------------------------------------------------------------------
 // Inlining support
 
@@ -362,12 +415,12 @@ bool ForInStatement::IsInlineable() const {
 }
 
 
-bool WithEnterStatement::IsInlineable() const {
+bool EnterWithContextStatement::IsInlineable() const {
   return false;
 }
 
 
-bool WithExitStatement::IsInlineable() const {
+bool ExitContextStatement::IsInlineable() const {
   return false;
 }
 
@@ -587,7 +640,7 @@ bool CountOperation::IsInlineable() const {
 
 void Property::RecordTypeFeedback(TypeFeedbackOracle* oracle) {
   // Record type feedback from the oracle in the AST.
-  is_monomorphic_ = oracle->LoadIsMonomorphic(this);
+  is_monomorphic_ = oracle->LoadIsMonomorphicNormal(this);
   if (key()->IsPropertyName()) {
     if (oracle->LoadIsBuiltin(this, Builtins::kLoadIC_ArrayLength)) {
       is_array_length_ = true;
@@ -607,9 +660,9 @@ void Property::RecordTypeFeedback(TypeFeedbackOracle* oracle) {
     is_string_access_ = true;
   } else if (is_monomorphic_) {
     monomorphic_receiver_type_ = oracle->LoadMonomorphicReceiverType(this);
-    if (monomorphic_receiver_type_->has_external_array_elements()) {
-      set_external_array_type(oracle->GetKeyedLoadExternalArrayType(this));
-    }
+  } else if (oracle->LoadIsMegamorphicWithTypeInfo(this)) {
+    receiver_types_ = new ZoneMapList(kMaxKeyedPolymorphism);
+    oracle->CollectKeyedReceiverTypes(this->id(), receiver_types_);
   }
 }
 
@@ -617,7 +670,7 @@ void Property::RecordTypeFeedback(TypeFeedbackOracle* oracle) {
 void Assignment::RecordTypeFeedback(TypeFeedbackOracle* oracle) {
   Property* prop = target()->AsProperty();
   ASSERT(prop != NULL);
-  is_monomorphic_ = oracle->StoreIsMonomorphic(this);
+  is_monomorphic_ = oracle->StoreIsMonomorphicNormal(this);
   if (prop->key()->IsPropertyName()) {
     Literal* lit_key = prop->key()->AsLiteral();
     ASSERT(lit_key != NULL && lit_key->handle()->IsString());
@@ -625,23 +678,23 @@ void Assignment::RecordTypeFeedback(TypeFeedbackOracle* oracle) {
     ZoneMapList* types = oracle->StoreReceiverTypes(this, name);
     receiver_types_ = types;
   } else if (is_monomorphic_) {
-    // Record receiver type for monomorphic keyed loads.
+    // Record receiver type for monomorphic keyed stores.
     monomorphic_receiver_type_ = oracle->StoreMonomorphicReceiverType(this);
-    if (monomorphic_receiver_type_->has_external_array_elements()) {
-      set_external_array_type(oracle->GetKeyedStoreExternalArrayType(this));
-    }
+  } else if (oracle->StoreIsMegamorphicWithTypeInfo(this)) {
+    receiver_types_ = new ZoneMapList(kMaxKeyedPolymorphism);
+    oracle->CollectKeyedReceiverTypes(this->id(), receiver_types_);
   }
 }
 
 
 void CountOperation::RecordTypeFeedback(TypeFeedbackOracle* oracle) {
-  is_monomorphic_ = oracle->StoreIsMonomorphic(this);
+  is_monomorphic_ = oracle->StoreIsMonomorphicNormal(this);
   if (is_monomorphic_) {
-    // Record receiver type for monomorphic keyed loads.
+    // Record receiver type for monomorphic keyed stores.
     monomorphic_receiver_type_ = oracle->StoreMonomorphicReceiverType(this);
-    if (monomorphic_receiver_type_->has_external_array_elements()) {
-      set_external_array_type(oracle->GetKeyedStoreExternalArrayType(this));
-    }
+  } else if (oracle->StoreIsMegamorphicWithTypeInfo(this)) {
+    receiver_types_ = new ZoneMapList(kMaxKeyedPolymorphism);
+    oracle->CollectKeyedReceiverTypes(this->id(), receiver_types_);
   }
 }
 

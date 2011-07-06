@@ -632,7 +632,8 @@ class ArgumentsAccessStub: public CodeStub {
  public:
   enum Type {
     READ_ELEMENT,
-    NEW_NON_STRICT,
+    NEW_NON_STRICT_FAST,
+    NEW_NON_STRICT_SLOW,
     NEW_STRICT
   };
 
@@ -646,20 +647,9 @@ class ArgumentsAccessStub: public CodeStub {
 
   void Generate(MacroAssembler* masm);
   void GenerateReadElement(MacroAssembler* masm);
-  void GenerateNewObject(MacroAssembler* masm);
-
-  int GetArgumentsBoilerplateIndex() const {
-  return (type_ == NEW_STRICT)
-      ? Context::STRICT_MODE_ARGUMENTS_BOILERPLATE_INDEX
-      : Context::ARGUMENTS_BOILERPLATE_INDEX;
-  }
-
-  int GetArgumentsObjectSize() const {
-    if (type_ == NEW_STRICT)
-      return Heap::kArgumentsObjectSizeStrict;
-    else
-      return Heap::kArgumentsObjectSize;
-  }
+  void GenerateNewStrict(MacroAssembler* masm);
+  void GenerateNewNonStrictFast(MacroAssembler* masm);
+  void GenerateNewNonStrictSlow(MacroAssembler* masm);
 
   const char* GetName() { return "ArgumentsAccessStub"; }
 
@@ -975,11 +965,11 @@ class KeyedStoreFastElementStub : public CodeStub {
 
 class KeyedLoadExternalArrayStub : public CodeStub {
  public:
-  explicit KeyedLoadExternalArrayStub(ExternalArrayType array_type)
-      : array_type_(array_type) { }
+  explicit KeyedLoadExternalArrayStub(JSObject::ElementsKind elements_kind)
+      : elements_kind_(elements_kind) { }
 
   Major MajorKey() { return KeyedLoadExternalArray; }
-  int MinorKey() { return array_type_; }
+  int MinorKey() { return elements_kind_; }
 
   void Generate(MacroAssembler* masm);
 
@@ -988,17 +978,17 @@ class KeyedLoadExternalArrayStub : public CodeStub {
   DECLARE_ARRAY_STUB_PRINT(KeyedLoadExternalArrayStub)
 
  protected:
-  ExternalArrayType array_type_;
+  JSObject::ElementsKind elements_kind_;
 };
 
 
 class KeyedStoreExternalArrayStub : public CodeStub {
  public:
-  explicit KeyedStoreExternalArrayStub(ExternalArrayType array_type)
-      : array_type_(array_type) { }
+  explicit KeyedStoreExternalArrayStub(JSObject::ElementsKind elements_kind)
+      : elements_kind_(elements_kind) { }
 
   Major MajorKey() { return KeyedStoreExternalArray; }
-  int MinorKey() { return array_type_; }
+  int MinorKey() { return elements_kind_; }
 
   void Generate(MacroAssembler* masm);
 
@@ -1007,9 +997,21 @@ class KeyedStoreExternalArrayStub : public CodeStub {
   DECLARE_ARRAY_STUB_PRINT(KeyedStoreExternalArrayStub)
 
  protected:
-  ExternalArrayType array_type_;
+  JSObject::ElementsKind elements_kind_;
 };
 
+
+class ToBooleanStub: public CodeStub {
+ public:
+  explicit ToBooleanStub(Register tos) : tos_(tos) { }
+
+  void Generate(MacroAssembler* masm);
+
+ private:
+  Register tos_;
+  Major MajorKey() { return ToBoolean; }
+  int MinorKey() { return tos_.code(); }
+};
 
 } }  // namespace v8::internal
 

@@ -97,7 +97,7 @@ class LCodeGen BASE_EMBEDDED {
   void DoDeferredNumberTagI(LNumberTagI* instr);
   void DoDeferredTaggedToI(LTaggedToI* instr);
   void DoDeferredMathAbsTaggedHeapNumber(LUnaryMathOperation* instr);
-  void DoDeferredStackCheck(LGoto* instr);
+  void DoDeferredStackCheck(LStackCheck* instr);
   void DoDeferredStringCharCodeAt(LStringCharCodeAt* instr);
   void DoDeferredStringCharFromCode(LStringCharFromCode* instr);
   void DoDeferredLInstanceOfKnownGlobal(LInstanceOfKnownGlobal* instr,
@@ -232,7 +232,7 @@ class LCodeGen BASE_EMBEDDED {
   int ToInteger32(LConstantOperand* op) const;
   Operand BuildExternalArrayOperand(LOperand* external_pointer,
                                     LOperand* key,
-                                    ExternalArrayType array_type);
+                                    JSObject::ElementsKind elements_kind);
 
   // Specific math operations - used from DoUnaryMathOperation.
   void EmitIntegerMathAbs(LUnaryMathOperation* instr);
@@ -258,10 +258,13 @@ class LCodeGen BASE_EMBEDDED {
   void RecordPosition(int position);
 
   static Condition TokenToCondition(Token::Value op, bool is_unsigned);
-  void EmitGoto(int block, LDeferredCode* deferred_stack_check = NULL);
+  void EmitGoto(int block);
   void EmitBranch(int left_block, int right_block, Condition cc);
   void EmitCmpI(LOperand* left, LOperand* right);
-  void EmitNumberUntagD(Register input, XMMRegister result, LEnvironment* env);
+  void EmitNumberUntagD(Register input,
+                        XMMRegister result,
+                        bool deoptimize_on_undefined,
+                        LEnvironment* env);
 
   // Emits optimized code for typeof x == "y".  Modifies input register.
   // Returns the condition on which a final split to

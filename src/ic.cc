@@ -578,13 +578,7 @@ bool CallICBase::TryUpdateExtraICState(LookupResult* lookup,
         // out of bounds, update the state to record this fact.
         if (StringStubState::decode(*extra_ic_state) == DEFAULT_STRING_STUB &&
             argc >= 1 && args[1]->IsNumber()) {
-          double index;
-          if (args[1]->IsSmi()) {
-            index = Smi::cast(args[1])->value();
-          } else {
-            ASSERT(args[1]->IsHeapNumber());
-            index = DoubleToInteger(HeapNumber::cast(args[1])->value());
-          }
+          double index = DoubleToInteger(args.number_at(1));
           if (index < 0 || index >= string->length()) {
             *extra_ic_state =
                 StringStubState::update(*extra_ic_state,
@@ -799,18 +793,35 @@ MaybeObject* KeyedCallIC::LoadFunction(State state,
     return TypeError("non_object_property_call", object, key);
   }
 
-  if (FLAG_use_ic && state != MEGAMORPHIC && !object->IsAccessCheckNeeded()) {
+  if (FLAG_use_ic && state != MEGAMORPHIC && object->IsHeapObject()) {
     int argc = target()->arguments_count();
     InLoopFlag in_loop = target()->ic_in_loop();
-    MaybeObject* maybe_code = isolate()->stub_cache()->ComputeCallMegamorphic(
-        argc, in_loop, Code::KEYED_CALL_IC, Code::kNoExtraICState);
-    Object* code;
-    if (maybe_code->ToObject(&code)) {
-      set_target(Code::cast(code));
+    Heap* heap = Handle<HeapObject>::cast(object)->GetHeap();
+    Map* map = heap->non_strict_arguments_elements_map();
+    if (object->IsJSObject() &&
+        Handle<JSObject>::cast(object)->elements()->map() == map) {
+      MaybeObject* maybe_code = isolate()->stub_cache()->ComputeCallArguments(
+          argc, in_loop, Code::KEYED_CALL_IC);
+      Object* code;
+      if (maybe_code->ToObject(&code)) {
+        set_target(Code::cast(code));
 #ifdef DEBUG
-      TraceIC(
-          "KeyedCallIC", key, state, target(), in_loop ? " (in-loop)" : "");
+        TraceIC(
+            "KeyedCallIC", key, state, target(), in_loop ? " (in-loop)" : "");
 #endif
+      }
+    } else if (FLAG_use_ic && state != MEGAMORPHIC &&
+               !object->IsAccessCheckNeeded()) {
+      MaybeObject* maybe_code = isolate()->stub_cache()->ComputeCallMegamorphic(
+          argc, in_loop, Code::KEYED_CALL_IC, Code::kNoExtraICState);
+      Object* code;
+      if (maybe_code->ToObject(&code)) {
+        set_target(Code::cast(code));
+#ifdef DEBUG
+        TraceIC(
+            "KeyedCallIC", key, state, target(), in_loop ? " (in-loop)" : "");
+#endif
+      }
     }
   }
 
@@ -849,37 +860,40 @@ MaybeObject* LoadIC::Load(State state,
   }
 
   if (FLAG_use_ic) {
-    Code* non_monomorphic_stub =
-        (state == UNINITIALIZED) ? pre_monomorphic_stub() : megamorphic_stub();
-
     // Use specialized code for getting the length of strings and
     // string wrapper objects.  The length property of string wrapper
     // objects is read-only and therefore always returns the length of
     // the underlying string value.  See ECMA-262 15.5.5.1.
     if ((object->IsString() || object->IsStringWrapper()) &&
         name->Equals(isolate()->heap()->length_symbol())) {
-      HandleScope scope(isolate());
-#ifdef DEBUG
-      if (FLAG_trace_ic) PrintF("[LoadIC : +#length /string]\n");
-#endif
-      if (state == PREMONOMORPHIC) {
+      AssertNoAllocation no_allocation;
+      Code* stub = NULL;
+      if (state == UNINITIALIZED) {
+        stub = pre_monomorphic_stub();
+      } else if (state == PREMONOMORPHIC) {
         if (object->IsString()) {
-          set_target(isolate()->builtins()->builtin(
-              Builtins::kLoadIC_StringLength));
+          stub = isolate()->builtins()->builtin(
+              Builtins::kLoadIC_StringLength);
         } else {
-          set_target(isolate()->builtins()->builtin(
-              Builtins::kLoadIC_StringWrapperLength));
+          stub = isolate()->builtins()->builtin(
+              Builtins::kLoadIC_StringWrapperLength);
         }
       } else if (state == MONOMORPHIC && object->IsStringWrapper()) {
-        set_target(isolate()->builtins()->builtin(
-            Builtins::kLoadIC_StringWrapperLength));
-      } else {
-        set_target(non_monomorphic_stub);
+        stub = isolate()->builtins()->builtin(
+            Builtins::kLoadIC_StringWrapperLength);
+      } else if (state != MEGAMORPHIC) {
+        stub = megamorphic_stub();
+      }
+      if (stub != NULL) {
+        set_target(stub);
+#ifdef DEBUG
+        if (FLAG_trace_ic) PrintF("[LoadIC : +#length /string]\n");
+#endif
       }
       // Get the string if we have a string wrapper object.
       if (object->IsJSValue()) {
-        object = Handle<Object>(Handle<JSValue>::cast(object)->value(),
-                                isolate());
+        return Smi::FromInt(
+            String::cast(Handle<JSValue>::cast(object)->value())->length());
       }
       return Smi::FromInt(String::cast(*object)->length());
     }
@@ -887,14 +901,21 @@ MaybeObject* LoadIC::Load(State state,
     // Use specialized code for getting the length of arrays.
     if (object->IsJSArray() &&
         name->Equals(isolate()->heap()->length_symbol())) {
+      AssertNoAllocation no_allocation;
+      Code* stub = NULL;
+      if (state == UNINITIALIZED) {
+        stub = pre_monomorphic_stub();
+      } else if (state == PREMONOMORPHIC) {
+        stub = isolate()->builtins()->builtin(
+            Builtins::kLoadIC_ArrayLength);
+      } else if (state != MEGAMORPHIC) {
+        stub = megamorphic_stub();
+      }
+      if (stub != NULL) {
+        set_target(stub);
 #ifdef DEBUG
-      if (FLAG_trace_ic) PrintF("[LoadIC : +#length /array]\n");
+        if (FLAG_trace_ic) PrintF("[LoadIC : +#length /array]\n");
 #endif
-      if (state == PREMONOMORPHIC) {
-        set_target(isolate()->builtins()->builtin(
-            Builtins::kLoadIC_ArrayLength));
-      } else {
-        set_target(non_monomorphic_stub);
       }
       return JSArray::cast(*object)->length();
     }
@@ -903,14 +924,22 @@ MaybeObject* LoadIC::Load(State state,
     if (object->IsJSFunction() &&
         name->Equals(isolate()->heap()->prototype_symbol()) &&
         JSFunction::cast(*object)->should_have_prototype()) {
+      { AssertNoAllocation no_allocation;
+        Code* stub = NULL;
+        if (state == UNINITIALIZED) {
+          stub = pre_monomorphic_stub();
+        } else if (state == PREMONOMORPHIC) {
+          stub = isolate()->builtins()->builtin(
+              Builtins::kLoadIC_FunctionPrototype);
+        } else if (state != MEGAMORPHIC) {
+          stub = megamorphic_stub();
+        }
+        if (stub != NULL) {
+          set_target(stub);
 #ifdef DEBUG
-      if (FLAG_trace_ic) PrintF("[LoadIC : +#prototype /function]\n");
+          if (FLAG_trace_ic) PrintF("[LoadIC : +#prototype /function]\n");
 #endif
-      if (state == PREMONOMORPHIC) {
-        set_target(isolate()->builtins()->builtin(
-            Builtins::kLoadIC_FunctionPrototype));
-      } else {
-        set_target(non_monomorphic_stub);
+        }
       }
       return Accessors::FunctionGetPrototype(*object, 0);
     }
@@ -1070,10 +1099,10 @@ void LoadIC::UpdateCaches(LookupResult* lookup,
 
 String* KeyedLoadIC::GetStubNameForCache(IC::State ic_state) {
   if (ic_state == MONOMORPHIC) {
-    return isolate()->heap()->KeyedLoadSpecializedMonomorphic_symbol();
+    return isolate()->heap()->KeyedLoadElementMonomorphic_symbol();
   } else {
     ASSERT(ic_state == MEGAMORPHIC);
-    return isolate()->heap()->KeyedLoadSpecializedPolymorphic_symbol();
+    return isolate()->heap()->KeyedLoadElementPolymorphic_symbol();
   }
 }
 
@@ -1085,8 +1114,8 @@ MaybeObject* KeyedLoadIC::GetFastElementStubWithoutMapCheck(
 
 
 MaybeObject* KeyedLoadIC::GetExternalArrayStubWithoutMapCheck(
-    ExternalArrayType array_type) {
-  return KeyedLoadExternalArrayStub(array_type).TryGetCode();
+    JSObject::ElementsKind elements_kind) {
+  return KeyedLoadExternalArrayStub(elements_kind).TryGetCode();
 }
 
 
@@ -1243,9 +1272,13 @@ MaybeObject* KeyedLoadIC::Load(State state,
         }
       } else if (object->IsJSObject()) {
         JSObject* receiver = JSObject::cast(*object);
-        if (receiver->HasIndexedInterceptor()) {
+        Heap* heap = Handle<JSObject>::cast(object)->GetHeap();
+        Map* elements_map = Handle<JSObject>::cast(object)->elements()->map();
+        if (elements_map == heap->non_strict_arguments_elements_map()) {
+          stub = non_strict_arguments_stub();
+        } else if (receiver->HasIndexedInterceptor()) {
           stub = indexed_interceptor_stub();
-        } else if (key->IsSmi()) {
+        } else if (key->IsSmi() && (target() != non_strict_arguments_stub())) {
           MaybeObject* maybe_stub = ComputeStub(receiver,
                                                 false,
                                                 kNonStrictMode,
@@ -1638,7 +1671,7 @@ MaybeObject* KeyedIC::ComputeStub(JSObject* receiver,
 
   // If the maximum number of receiver maps has been exceeded, use the generic
   // version of the IC.
-  if (target_receiver_maps.length() > KeyedIC::kMaxKeyedPolymorphism) {
+  if (target_receiver_maps.length() > kMaxKeyedPolymorphism) {
     return generic_stub;
   }
 
@@ -1697,8 +1730,8 @@ MaybeObject* KeyedIC::ComputeMonomorphicStubWithoutMapCheck(
       return generic_stub;
     }
     Code* default_stub = Code::cast(maybe_default_stub);
-    return GetExternalArrayStubWithoutMapCheck(
-        default_stub->external_array_type());
+    Map* first_map = default_stub->FindFirstMap();
+    return GetExternalArrayStubWithoutMapCheck(first_map->elements_kind());
   } else if (receiver_map->has_fast_elements()) {
     bool is_js_array = receiver_map->instance_type() == JS_ARRAY_TYPE;
     return GetFastElementStubWithoutMapCheck(is_js_array);
@@ -1713,14 +1746,10 @@ MaybeObject* KeyedIC::ComputeMonomorphicStub(JSObject* receiver,
                                              StrictModeFlag strict_mode,
                                              Code* generic_stub) {
   Code* result = NULL;
-  if (receiver->HasExternalArrayElements()) {
+  if (receiver->HasFastElements() ||
+      receiver->HasExternalArrayElements()) {
     MaybeObject* maybe_stub =
-        isolate()->stub_cache()->ComputeKeyedLoadOrStoreExternalArray(
-            receiver, is_store, strict_mode);
-    if (!maybe_stub->To(&result)) return maybe_stub;
-  } else if (receiver->map()->has_fast_elements()) {
-    MaybeObject* maybe_stub =
-        isolate()->stub_cache()->ComputeKeyedLoadOrStoreFastElement(
+        isolate()->stub_cache()->ComputeKeyedLoadOrStoreElement(
             receiver, is_store, strict_mode);
     if (!maybe_stub->To(&result)) return maybe_stub;
   } else {
@@ -1732,10 +1761,10 @@ MaybeObject* KeyedIC::ComputeMonomorphicStub(JSObject* receiver,
 
 String* KeyedStoreIC::GetStubNameForCache(IC::State ic_state) {
   if (ic_state == MONOMORPHIC) {
-    return isolate()->heap()->KeyedStoreSpecializedMonomorphic_symbol();
+    return isolate()->heap()->KeyedStoreElementMonomorphic_symbol();
   } else {
     ASSERT(ic_state == MEGAMORPHIC);
-    return isolate()->heap()->KeyedStoreSpecializedPolymorphic_symbol();
+    return isolate()->heap()->KeyedStoreElementPolymorphic_symbol();
   }
 }
 
@@ -1747,8 +1776,8 @@ MaybeObject* KeyedStoreIC::GetFastElementStubWithoutMapCheck(
 
 
 MaybeObject* KeyedStoreIC::GetExternalArrayStubWithoutMapCheck(
-    ExternalArrayType array_type) {
-  return KeyedStoreExternalArrayStub(array_type).TryGetCode();
+    JSObject::ElementsKind elements_kind) {
+  return KeyedStoreExternalArrayStub(elements_kind).TryGetCode();
 }
 
 
@@ -1819,15 +1848,21 @@ MaybeObject* KeyedStoreIC::Store(State state,
     Code* stub = (strict_mode == kStrictMode)
         ? generic_stub_strict()
         : generic_stub();
-    if (!force_generic) {
-      if (object->IsJSObject() && key->IsSmi()) {
-        JSObject* receiver = JSObject::cast(*object);
-        MaybeObject* maybe_stub = ComputeStub(receiver,
-                                              true,
-                                              strict_mode,
-                                              stub);
-        stub = maybe_stub->IsFailure() ?
-            NULL : Code::cast(maybe_stub->ToObjectUnchecked());
+    if (object->IsJSObject()) {
+      JSObject* receiver = JSObject::cast(*object);
+      Heap* heap = Handle<JSObject>::cast(object)->GetHeap();
+      Map* elements_map = Handle<JSObject>::cast(object)->elements()->map();
+      if (elements_map == heap->non_strict_arguments_elements_map()) {
+        stub = non_strict_arguments_stub();
+      } else if (!force_generic) {
+        if (key->IsSmi() && (target() != non_strict_arguments_stub())) {
+          MaybeObject* maybe_stub = ComputeStub(receiver,
+                                                true,
+                                                strict_mode,
+                                                stub);
+          stub = maybe_stub->IsFailure() ?
+              NULL : Code::cast(maybe_stub->ToObjectUnchecked());
+        }
       }
     }
     if (stub != NULL) set_target(stub);
@@ -2293,25 +2328,21 @@ BinaryOpIC::TypeInfo BinaryOpIC::GetTypeInfo(Handle<Object> left,
 }
 
 
-// defined in code-stubs-<arch>.cc
-// Only needed to remove dependency of ic.cc on code-stubs-<arch>.h.
-Handle<Code> GetUnaryOpStub(int key, UnaryOpIC::TypeInfo type_info);
-
-
 RUNTIME_FUNCTION(MaybeObject*, UnaryOp_Patch) {
   ASSERT(args.length() == 4);
 
   HandleScope scope(isolate);
   Handle<Object> operand = args.at<Object>(0);
-  int key = Smi::cast(args[1])->value();
-  Token::Value op = static_cast<Token::Value>(Smi::cast(args[2])->value());
+  int key = args.smi_at(1);
+  Token::Value op = static_cast<Token::Value>(args.smi_at(2));
   UnaryOpIC::TypeInfo previous_type =
-      static_cast<UnaryOpIC::TypeInfo>(Smi::cast(args[3])->value());
+      static_cast<UnaryOpIC::TypeInfo>(args.smi_at(3));
 
   UnaryOpIC::TypeInfo type = UnaryOpIC::GetTypeInfo(operand);
   type = UnaryOpIC::ComputeNewType(type, previous_type);
 
-  Handle<Code> code = GetUnaryOpStub(key, type);
+  UnaryOpStub stub(key, type);
+  Handle<Code> code = stub.GetCode();
   if (!code.is_null()) {
     if (FLAG_trace_ic) {
       PrintF("[UnaryOpIC (%s->%s)#%s]\n",
@@ -2348,23 +2379,16 @@ RUNTIME_FUNCTION(MaybeObject*, UnaryOp_Patch) {
   return *result;
 }
 
-// defined in code-stubs-<arch>.cc
-// Only needed to remove dependency of ic.cc on code-stubs-<arch>.h.
-Handle<Code> GetBinaryOpStub(int key,
-                             BinaryOpIC::TypeInfo type_info,
-                             BinaryOpIC::TypeInfo result_type);
-
-
 RUNTIME_FUNCTION(MaybeObject*, BinaryOp_Patch) {
   ASSERT(args.length() == 5);
 
   HandleScope scope(isolate);
   Handle<Object> left = args.at<Object>(0);
   Handle<Object> right = args.at<Object>(1);
-  int key = Smi::cast(args[2])->value();
-  Token::Value op = static_cast<Token::Value>(Smi::cast(args[3])->value());
+  int key = args.smi_at(2);
+  Token::Value op = static_cast<Token::Value>(args.smi_at(3));
   BinaryOpIC::TypeInfo previous_type =
-      static_cast<BinaryOpIC::TypeInfo>(Smi::cast(args[4])->value());
+      static_cast<BinaryOpIC::TypeInfo>(args.smi_at(4));
 
   BinaryOpIC::TypeInfo type = BinaryOpIC::GetTypeInfo(left, right);
   type = BinaryOpIC::JoinTypes(type, previous_type);
@@ -2393,7 +2417,8 @@ RUNTIME_FUNCTION(MaybeObject*, BinaryOp_Patch) {
     result_type = BinaryOpIC::HEAP_NUMBER;
   }
 
-  Handle<Code> code = GetBinaryOpStub(key, type, result_type);
+  BinaryOpStub stub(key, type, result_type);
+  Handle<Code> code = stub.GetCode();
   if (!code.is_null()) {
     if (FLAG_trace_ic) {
       PrintF("[BinaryOpIC (%s->(%s->%s))#%s]\n",
@@ -2523,7 +2548,7 @@ CompareIC::State CompareIC::TargetState(State state,
 RUNTIME_FUNCTION(Code*, CompareIC_Miss) {
   NoHandleAllocation na;
   ASSERT(args.length() == 3);
-  CompareIC ic(isolate, static_cast<Token::Value>(Smi::cast(args[2])->value()));
+  CompareIC ic(isolate, static_cast<Token::Value>(args.smi_at(2)));
   ic.UpdateCaches(args.at<Object>(0), args.at<Object>(1));
   return ic.target();
 }

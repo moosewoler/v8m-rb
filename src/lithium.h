@@ -144,7 +144,8 @@ class LUnallocated: public LOperand {
   };
 
   static const int kMaxVirtualRegisters = 1 << (kVirtualRegisterWidth + 1);
-  static const int kMaxFixedIndices = 128;
+  static const int kMaxFixedIndex = 63;
+  static const int kMinFixedIndex = -64;
 
   bool HasIgnorePolicy() const { return policy() == IGNORE; }
   bool HasNoPolicy() const { return policy() == NONE; }
@@ -585,7 +586,7 @@ class DeepIterator BASE_EMBEDDED {
 };
 
 
-int ExternalArrayTypeToShiftSize(ExternalArrayType type);
+int ElementsKindToShiftSize(JSObject::ElementsKind elements_kind);
 
 
 } }  // namespace v8::internal

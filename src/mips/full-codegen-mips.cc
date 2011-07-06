@@ -189,7 +189,7 @@ void FullCodeGenerator::Generate(CompilationInfo* info) {
       FastNewContextStub stub(heap_slots);
       __ CallStub(&stub);
     } else {
-      __ CallRuntime(Runtime::kNewContext, 1);
+      __ CallRuntime(Runtime::kNewFunctionContext, 1);
     }
     function_in_register = false;
     // Context is returned in both v0 and cp.  It replaces the context
@@ -238,17 +238,17 @@ void FullCodeGenerator::Generate(CompilationInfo* info) {
     //   function, receiver address, parameter count.
     // The stub will rewrite receiever and parameter count if the previous
     // stack frame was an arguments adapter frame.
-    ArgumentsAccessStub stub(
-        is_strict_mode() ? ArgumentsAccessStub::NEW_STRICT
-                         : ArgumentsAccessStub::NEW_NON_STRICT);
+    ArgumentsAccessStub::Type type;
+    if (is_strict_mode()) {
+      type = ArgumentsAccessStub::NEW_STRICT;
+    } else if (function()->has_duplicate_parameters()) {
+      type = ArgumentsAccessStub::NEW_NON_STRICT_SLOW;
+    } else {
+      type = ArgumentsAccessStub::NEW_NON_STRICT_FAST;
+    }
+    ArgumentsAccessStub stub(type);
     __ CallStub(&stub);
 
-    Variable* arguments_shadow = scope()->arguments_shadow();
-    if (arguments_shadow != NULL) {
-      // Duplicate the value; move-to-slot operation might clobber registers.
-      __ mov(a3, v0);
-      Move(arguments_shadow->AsSlot(), a3, a1, a2);
-    }
     Move(arguments->AsSlot(), v0, a1, a2);
   }
 
@@ -386,7 +386,7 @@ void FullCodeGenerator::TestContext::Plug(Slot* slot) const {
   // For simplicity we always test the accumulator register.
   codegen()->Move(result_register(), slot);
   codegen()->PrepareForBailoutBeforeSplit(TOS_REG, false, NULL, NULL);
-  codegen()->DoTest(true_label_, false_label_, fall_through_);
+  codegen()->DoTest(this);
 }
 
 
@@ -420,7 +420,7 @@ void FullCodeGenerator::TestContext::Plug(Heap::RootListIndex index) const {
     if (true_label_ != fall_through_) __ Branch(true_label_);
   } else {
     __ LoadRoot(result_register(), index);
-    codegen()->DoTest(true_label_, false_label_, fall_through_);
+    codegen()->DoTest(this);
   }
 }
 
@@ -467,7 +467,7 @@ void FullCodeGenerator::TestContext::Plug(Handle<Object> lit) const {
   } else {
     // For simplicity we always test the accumulator register.
     __ li(result_register(), Operand(lit));
-    codegen()->DoTest(true_label_, false_label_, fall_through_);
+    codegen()->DoTest(this);
   }
 }
 
@@ -503,7 +503,7 @@ void FullCodeGenerator::TestContext::DropAndPlug(int count,
   __ Drop(count);
   __ Move(result_register(), reg);
   codegen()->PrepareForBailoutBeforeSplit(TOS_REG, false, NULL, NULL);
-  codegen()->DoTest(true_label_, false_label_, fall_through_);
+  codegen()->DoTest(this);
 }
 
 
@@ -581,7 +581,8 @@ void FullCodeGenerator::TestContext::Plug(bool flag) const {
 }
 
 
-void FullCodeGenerator::DoTest(Label* if_true,
+void FullCodeGenerator::DoTest(Expression* condition,
+                               Label* if_true,
                                Label* if_false,
                                Label* fall_through) {
   if (CpuFeatures::IsSupported(FPU)) {
@@ -1128,8 +1129,7 @@ void FullCodeGenerator::EmitLoadGlobalSlotCheckExtensions(
         __ Branch(slow, ne, temp, Operand(zero_reg));
       }
       // Load next context in chain.
-      __ lw(next, ContextOperand(current, Context::CLOSURE_INDEX));
-      __ lw(next, FieldMemOperand(next, JSFunction::kContextOffset));
+      __ lw(next, ContextOperand(current, Context::PREVIOUS_INDEX));
       // Walk the rest of the chain without clobbering cp.
       current = next;
     }
@@ -1153,8 +1153,7 @@ void FullCodeGenerator::EmitLoadGlobalSlotCheckExtensions(
     __ lw(temp, ContextOperand(next, Context::EXTENSION_INDEX));
     __ Branch(slow, ne, temp, Operand(zero_reg));
     // Load next context in chain.
-    __ lw(next, ContextOperand(next, Context::CLOSURE_INDEX));
-    __ lw(next, FieldMemOperand(next, JSFunction::kContextOffset));
+    __ lw(next, ContextOperand(next, Context::PREVIOUS_INDEX));
     __ Branch(&loop);
     __ bind(&fast);
   }
@@ -1184,8 +1183,7 @@ MemOperand FullCodeGenerator::ContextSlotOperandCheckExtensions(
         __ lw(temp, ContextOperand(context, Context::EXTENSION_INDEX));
         __ Branch(slow, ne, temp, Operand(zero_reg));
       }
-      __ lw(next, ContextOperand(context, Context::CLOSURE_INDEX));
-      __ lw(next, FieldMemOperand(next, JSFunction::kContextOffset));
+      __ lw(next, ContextOperand(context, Context::PREVIOUS_INDEX));
       // Walk the rest of the chain without clobbering cp.
       context = next;
     }
@@ -1256,13 +1254,12 @@ void FullCodeGenerator::EmitDynamicLoadFromSlotFastCase(
 
 
 void FullCodeGenerator::EmitVariableLoad(Variable* var) {
-  // Four cases: non-this global variables, lookup slots, all other
-  // types of slots, and parameters that rewrite to explicit property
-  // accesses on the arguments object.
+  // Three cases: non-this global variables, lookup slots, and all other
+  // types of slots.
   Slot* slot = var->AsSlot();
-  Property* property = var->AsProperty();
+  ASSERT((var->is_global() && !var->is_this()) == (slot == NULL));
 
-  if (var->is_global() && !var->is_this()) {
+  if (slot == NULL) {
     Comment cmnt(masm_, "Global variable");
     // Use inline caching. Variable name is passed in a2 and the global
     // object (receiver) in a0.
@@ -1272,7 +1269,7 @@ void FullCodeGenerator::EmitVariableLoad(Variable* var) {
     EmitCallIC(ic, RelocInfo::CODE_TARGET_CONTEXT, AstNode::kNoNumber);
     context()->Plug(v0);
 
-  } else if (slot != NULL && slot->type() == Slot::LOOKUP) {
+  } else if (slot->type() == Slot::LOOKUP) {
     Label done, slow;
 
     // Generate code for loading from variables potentially shadowed
@@ -1288,7 +1285,7 @@ void FullCodeGenerator::EmitVariableLoad(Variable* var) {
 
     context()->Plug(v0);
 
-  } else if (slot != NULL) {
+  } else {
     Comment cmnt(masm_, (slot->type() == Slot::CONTEXT)
                             ? "Context slot"
                             : "Stack slot");
@@ -1305,31 +1302,6 @@ void FullCodeGenerator::EmitVariableLoad(Variable* var) {
      } else {
        context()->Plug(slot);
      }
-  } else {
-    Comment cmnt(masm_, "Rewritten parameter");
-    ASSERT_NOT_NULL(property);
-    // Rewritten parameter accesses are of the form "slot[literal]".
-    // Assert that the object is in a slot.
-    Variable* object_var = property->obj()->AsVariableProxy()->AsVariable();
-    ASSERT_NOT_NULL(object_var);
-    Slot* object_slot = object_var->AsSlot();
-    ASSERT_NOT_NULL(object_slot);
-
-    // Load the object.
-    Move(a1, object_slot);
-
-    // Assert that the key is a smi.
-    Literal* key_literal = property->key()->AsLiteral();
-    ASSERT_NOT_NULL(key_literal);
-    ASSERT(key_literal->handle()->IsSmi());
-
-    // Load the key.
-    __ li(a0, Operand(key_literal->handle()));
-
-    // Call keyed load IC. It has arguments key and receiver in a0 and a1.
-    Handle<Code> ic = isolate()->builtins()->KeyedLoadIC_Initialize();
-    EmitCallIC(ic, RelocInfo::CODE_TARGET, GetPropertyId(property));
-    context()->Plug(v0);
   }
 }
 
@@ -1573,7 +1545,7 @@ void FullCodeGenerator::VisitAssignment(Assignment* expr) {
   }
 
   // Left-hand side can only be a property, a global or a (parameter or local)
-  // slot. Variables with rewrite to .arguments are treated as KEYED_PROPERTY.
+  // slot.
   enum LhsKind { VARIABLE, NAMED_PROPERTY, KEYED_PROPERTY };
   LhsKind assign_type = VARIABLE;
   Property* property = expr->target()->AsProperty();
@@ -1600,27 +1572,13 @@ void FullCodeGenerator::VisitAssignment(Assignment* expr) {
     case KEYED_PROPERTY:
       // We need the key and receiver on both the stack and in v0 and a1.
       if (expr->is_compound()) {
-        if (property->is_arguments_access()) {
-          VariableProxy* obj_proxy = property->obj()->AsVariableProxy();
-          __ lw(v0, EmitSlotSearch(obj_proxy->var()->AsSlot(), v0));
-          __ push(v0);
-          __ li(v0, Operand(property->key()->AsLiteral()->handle()));
-        } else {
-          VisitForStackValue(property->obj());
-          VisitForAccumulatorValue(property->key());
-        }
+        VisitForStackValue(property->obj());
+        VisitForAccumulatorValue(property->key());
         __ lw(a1, MemOperand(sp, 0));
         __ push(v0);
       } else {
-        if (property->is_arguments_access()) {
-          VariableProxy* obj_proxy = property->obj()->AsVariableProxy();
-          __ lw(a1, EmitSlotSearch(obj_proxy->var()->AsSlot(), v0));
-          __ li(v0, Operand(property->key()->AsLiteral()->handle()));
-          __ Push(a1, v0);
-        } else {
-          VisitForStackValue(property->obj());
-          VisitForStackValue(property->key());
-        }
+        VisitForStackValue(property->obj());
+        VisitForStackValue(property->key());
       }
       break;
   }
@@ -1830,7 +1788,7 @@ void FullCodeGenerator::EmitAssignment(Expression* expr, int bailout_ast_id) {
   }
 
   // Left-hand side can only be a property, a global or a (parameter or local)
-  // slot. Variables with rewrite to .arguments are treated as KEYED_PROPERTY.
+  // slot.
   enum LhsKind { VARIABLE, NAMED_PROPERTY, KEYED_PROPERTY };
   LhsKind assign_type = VARIABLE;
   Property* prop = expr->AsProperty();
@@ -1861,20 +1819,10 @@ void FullCodeGenerator::EmitAssignment(Expression* expr, int bailout_ast_id) {
     }
     case KEYED_PROPERTY: {
       __ push(result_register());  // Preserve value.
-      if (prop->is_synthetic()) {
-        ASSERT(prop->obj()->AsVariableProxy() != NULL);
-        ASSERT(prop->key()->AsLiteral() != NULL);
-        { AccumulatorValueContext for_object(this);
-          EmitVariableLoad(prop->obj()->AsVariableProxy()->var());
-        }
-        __ mov(a2, result_register());
-        __ li(a1, Operand(prop->key()->AsLiteral()->handle()));
-      } else {
-        VisitForStackValue(prop->obj());
-        VisitForAccumulatorValue(prop->key());
-        __ mov(a1, result_register());
-        __ pop(a2);
-      }
+      VisitForStackValue(prop->obj());
+      VisitForAccumulatorValue(prop->key());
+      __ mov(a1, result_register());
+      __ pop(a2);
       __ pop(a0);  // Restore value.
       Handle<Code> ic = is_strict_mode()
         ? isolate()->builtins()->KeyedStoreIC_Initialize_Strict()
@@ -1890,8 +1838,6 @@ void FullCodeGenerator::EmitAssignment(Expression* expr, int bailout_ast_id) {
 
 void FullCodeGenerator::EmitVariableAssignment(Variable* var,
                                                Token::Value op) {
-  // Left-hand sides that rewrite to explicit property accesses do not reach
-  // here.
   ASSERT(var != NULL);
   ASSERT(var->is_global() || var->AsSlot() != NULL);
 
@@ -3842,7 +3788,7 @@ void FullCodeGenerator::VisitCountOperation(CountOperation* expr) {
   }
 
   // Expression can only be a property, a global or a (parameter or local)
-  // slot. Variables with rewrite to .arguments are treated as KEYED_PROPERTY.
+  // slot.
   enum LhsKind { VARIABLE, NAMED_PROPERTY, KEYED_PROPERTY };
   LhsKind assign_type = VARIABLE;
   Property* prop = expr->expression()->AsProperty();
@@ -3870,15 +3816,8 @@ void FullCodeGenerator::VisitCountOperation(CountOperation* expr) {
       __ push(v0);
       EmitNamedPropertyLoad(prop);
     } else {
-      if (prop->is_arguments_access()) {
-        VariableProxy* obj_proxy = prop->obj()->AsVariableProxy();
-        __ lw(v0, EmitSlotSearch(obj_proxy->var()->AsSlot(), v0));
-        __ push(v0);
-        __ li(v0, Operand(prop->key()->AsLiteral()->handle()));
-      } else {
-        VisitForStackValue(prop->obj());
-        VisitForAccumulatorValue(prop->key());
-      }
+      VisitForStackValue(prop->obj());
+      VisitForAccumulatorValue(prop->key());
       __ lw(a1, MemOperand(sp, 0));
       __ push(v0);
       EmitKeyedPropertyLoad(prop);
@@ -4044,26 +3983,13 @@ void FullCodeGenerator::VisitForTypeofValue(Expression* expr) {
   }
 }
 
-
-bool FullCodeGenerator::TryLiteralCompare(Token::Value op,
-                                          Expression* left,
-                                          Expression* right,
-                                          Label* if_true,
-                                          Label* if_false,
-                                          Label* fall_through) {
-  if (op != Token::EQ && op != Token::EQ_STRICT) return false;
-
-  // Check for the pattern: typeof <expression> == <string literal>.
-  Literal* right_literal = right->AsLiteral();
-  if (right_literal == NULL) return false;
-  Handle<Object> right_literal_value = right_literal->handle();
-  if (!right_literal_value->IsString()) return false;
-  UnaryOperation* left_unary = left->AsUnaryOperation();
-  if (left_unary == NULL || left_unary->op() != Token::TYPEOF) return false;
-  Handle<String> check = Handle<String>::cast(right_literal_value);
-
+void FullCodeGenerator::EmitLiteralCompareTypeof(Expression* expr,
+                                                 Handle<String> check,
+                                                 Label* if_true,
+                                                 Label* if_false,
+                                                 Label* fall_through) {
   { AccumulatorValueContext context(this);
-    VisitForTypeofValue(left_unary->expression());
+    VisitForTypeofValue(expr);
   }
   PrepareForBailoutBeforeSplit(TOS_REG, true, if_true, if_false);
 
@@ -4117,8 +4043,18 @@ bool FullCodeGenerator::TryLiteralCompare(Token::Value op,
   } else {
     if (if_false != fall_through) __ jmp(if_false);
   }
+}
 
-  return true;
+
+void FullCodeGenerator::EmitLiteralCompareUndefined(Expression* expr,
+                                                    Label* if_true,
+                                                    Label* if_false,
+                                                    Label* fall_through) {
+  VisitForAccumulatorValue(expr);
+  PrepareForBailoutBeforeSplit(TOS_REG, true, if_true, if_false);
+
+  __ LoadRoot(at, Heap::kUndefinedValueRootIndex);
+  Split(eq, v0, Operand(at), if_true, if_false, fall_through);
 }
 
 
@@ -4138,14 +4074,12 @@ void FullCodeGenerator::VisitCompareOperation(CompareOperation* expr) {
 
   // First we try a fast inlined version of the compare when one of
   // the operands is a literal.
-  Token::Value op = expr->op();
-  Expression* left = expr->left();
-  Expression* right = expr->right();
-  if (TryLiteralCompare(op, left, right, if_true, if_false, fall_through)) {
+  if (TryLiteralCompare(expr, if_true, if_false, fall_through)) {
     context()->Plug(if_true, if_false);
     return;
   }
 
+  Token::Value op = expr->op();
   VisitForStackValue(expr->left());
   switch (op) {
     case Token::IN:

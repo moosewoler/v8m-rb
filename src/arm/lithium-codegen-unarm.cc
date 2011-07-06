@@ -209,7 +209,7 @@ bool LCodeGen::GeneratePrologue() {
       FastNewContextStub stub(heap_slots);
       __ CallStub(&stub);
     } else {
-      __ CallRuntime(Runtime::kNewContext, 1);
+      __ CallRuntime(Runtime::kNewFunctionContext, 1);
     }
     RecordSafepoint(Safepoint::kNoDeoptimizationIndex);
     // Context is returned in both cp and c_rval_reg.  It replaces the context
@@ -848,7 +848,7 @@ void LCodeGen::RecordSafepointWithRegistersAndDoubles(
 
 
 void LCodeGen::RecordPosition(int position) {
-  if (!FLAG_debug_info || position == RelocInfo::kNoPosition) return;
+  if (position == RelocInfo::kNoPosition) return;
   masm()->positions_recorder()->RecordPosition(position);
 }
 
@@ -966,8 +966,8 @@ void LCodeGen::DoModI(LModI* instr) {
     if (instr->hydrogen()->CheckFlag(HValue::kBailoutOnMinusZero)) {
       __ cmp(dividend, Operand(0));
       DeoptimizeIf(eq, instr->environment());
-      __ b(&done);
     }
+    __ b(&done);
     __ bind(&positive_dividend);
     __ and_(dividend, dividend, Operand(divisor - 1));
     __ bind(&done);
@@ -1494,6 +1494,20 @@ void LCodeGen::DoFixedArrayLength(LFixedArrayLength* instr) {
 }
 
 
+void LCodeGen::DoElementsKind(LElementsKind* instr) {
+  Register result = ToRegister(instr->result());
+  Register input = ToRegister(instr->InputAt(0));
+
+  // Load map into |result|.
+  __ ldr(result, FieldMemOperand(input, HeapObject::kMapOffset));
+  // Load the map's "bit field 2" into |result|. We only need the first byte,
+  // but the following bit field extraction takes care of that anyway.
+  __ ldr(result, FieldMemOperand(result, Map::kBitField2Offset));
+  // Retrieve elements_kind from bit field 2.
+  __ ubfx(result, result, Map::kElementsKindShift, Map::kElementsKindBitCount);
+}
+
+
 void LCodeGen::DoValueOf(LValueOf* instr) {
   Register input = ToRegister(instr->InputAt(0));
   Register result = ToRegister(instr->result());
@@ -1502,8 +1516,7 @@ void LCodeGen::DoValueOf(LValueOf* instr) {
   Label done;
 
   // If the object is a smi return the object.
-  __ tst(input, Operand(kSmiTagMask));
-  __ b(eq, &done);
+  __ JumpIfSmi(input, &done);
 
   // If the object is not a value type, return the object.
   __ CompareObjectType(input, map, map, JS_VALUE_TYPE);
@@ -1724,8 +1737,7 @@ void LCodeGen::DoBranch(LBranch* instr) {
       __ b(eq, false_label);
       __ cmp(reg, Operand(0));
       __ b(eq, false_label);
-      __ tst(reg, Operand(kSmiTagMask));
-      __ b(eq, true_label);
+      __ JumpIfSmi(reg, true_label);
 
       // Test double values. Zero and NaN are false.
       Register scratch = scratch0();
@@ -1763,45 +1775,17 @@ void LCodeGen::DoBranch(LBranch* instr) {
 }
 
 
-void LCodeGen::EmitGoto(int block, LDeferredCode* deferred_stack_check) {
+void LCodeGen::EmitGoto(int block) {
   block = chunk_->LookupDestination(block);
   int next_block = GetNextEmittedBlock(current_block_);
   if (block != next_block) {
-    // Perform stack overflow check if this goto needs it before jumping.
-    if (deferred_stack_check != NULL) {
-      __ LoadRoot(ip, Heap::kStackLimitRootIndex);
-      __ cmp(sp, Operand(ip));
-      __ b(hs, chunk_->GetAssemblyLabel(block));
-      __ jmp(deferred_stack_check->entry());
-      deferred_stack_check->SetExit(chunk_->GetAssemblyLabel(block));
-    } else {
-      __ jmp(chunk_->GetAssemblyLabel(block));
-    }
+    __ jmp(chunk_->GetAssemblyLabel(block));
   }
-}
-
-
-void LCodeGen::DoDeferredStackCheck(LGoto* instr) {
-  PushSafepointRegistersScope scope(this, Safepoint::kWithRegisters);
-  CallRuntimeFromDeferred(Runtime::kStackGuard, 0, instr);
 }
 
 
 void LCodeGen::DoGoto(LGoto* instr) {
-  class DeferredStackCheck: public LDeferredCode {
-   public:
-    DeferredStackCheck(LCodeGen* codegen, LGoto* instr)
-        : LDeferredCode(codegen), instr_(instr) { }
-    virtual void Generate() { codegen()->DoDeferredStackCheck(instr_); }
-   private:
-    LGoto* instr_;
-  };
-
-  DeferredStackCheck* deferred = NULL;
-  if (instr->include_stack_check()) {
-    deferred = new DeferredStackCheck(this, instr);
-  }
-  EmitGoto(instr->block_id(), deferred);
+  EmitGoto(instr->block_id());
 }
 
 
@@ -1898,7 +1882,7 @@ void LCodeGen::DoCmpIDAndBranch(LCmpIDAndBranch* instr) {
 }
 
 
-void LCodeGen::DoCmpJSObjectEq(LCmpJSObjectEq* instr) {
+void LCodeGen::DoCmpObjectEq(LCmpObjectEq* instr) {
   Register left = ToRegister(instr->InputAt(0));
   Register right = ToRegister(instr->InputAt(1));
   Register result = ToRegister(instr->result());
@@ -1910,7 +1894,7 @@ void LCodeGen::DoCmpJSObjectEq(LCmpJSObjectEq* instr) {
 }
 
 
-void LCodeGen::DoCmpJSObjectEqAndBranch(LCmpJSObjectEqAndBranch* instr) {
+void LCodeGen::DoCmpObjectEqAndBranch(LCmpObjectEqAndBranch* instr) {
   Register left = ToRegister(instr->InputAt(0));
   Register right = ToRegister(instr->InputAt(1));
   int false_block = chunk_->LookupDestination(instr->false_block_id());
@@ -1921,25 +1905,23 @@ void LCodeGen::DoCmpJSObjectEqAndBranch(LCmpJSObjectEqAndBranch* instr) {
 }
 
 
-void LCodeGen::DoCmpSymbolEq(LCmpSymbolEq* instr) {
+void LCodeGen::DoCmpConstantEq(LCmpConstantEq* instr) {
   Register left = ToRegister(instr->InputAt(0));
-  Register right = ToRegister(instr->InputAt(1));
   Register result = ToRegister(instr->result());
   Label is_true;
 
-  __ cmp(left, Operand(right));
+  __ cmp(left, Operand(instr->hydrogen()->right()));
   __ b(eq, &is_true);
   TrueFalseRoot(result, &is_true);
 }
 
 
-void LCodeGen::DoCmpSymbolEqAndBranch(LCmpSymbolEqAndBranch* instr) {
+void LCodeGen::DoCmpConstantEqAndBranch(LCmpConstantEqAndBranch* instr) {
   Register left = ToRegister(instr->InputAt(0));
-  Register right = ToRegister(instr->InputAt(1));
-  int false_block = chunk_->LookupDestination(instr->false_block_id());
   int true_block = chunk_->LookupDestination(instr->true_block_id());
+  int false_block = chunk_->LookupDestination(instr->false_block_id());
 
-  __ cmp(left, Operand(right));
+  __ cmp(left, Operand(instr->hydrogen()->right()));
   EmitBranch(true_block, false_block, eq);
 }
 
@@ -1959,8 +1941,7 @@ void LCodeGen::DoIsNull(LIsNull* instr) {
     __ LoadRoot(ip, Heap::kUndefinedValueRootIndex);
     __ cmp(ip, reg);
     __ b(eq, &true_value);
-    __ tst(reg, Operand(kSmiTagMask));
-    __ b(eq, &false_value);
+    __ JumpIfSmi(reg, &false_value);
     // Check for undetectable objects by looking in the bit field in
     // the map. The object has already been smi checked.
     Register scratch = result;
@@ -1996,8 +1977,7 @@ void LCodeGen::DoIsNullAndBranch(LIsNullAndBranch* instr) {
     __ LoadRoot(ip, Heap::kUndefinedValueRootIndex);
     __ cmp(reg, ip);
     __ b(eq, true_label);
-    __ tst(reg, Operand(kSmiTagMask));
-    __ b(eq, false_label);
+    __ JumpIfSmi(reg, false_label);
     // Check for undetectable objects by looking in the bit field in
     // the map. The object has already been smi checked.
     __ ldr(scratch, FieldMemOperand(reg, HeapObject::kMapOffset));
@@ -2072,8 +2052,7 @@ void LCodeGen::DoIsSmi(LIsSmi* instr) {
   Register result = ToRegister(instr->result());
   Register input_reg = EmitLoadRegister(instr->InputAt(0), ip);
   Label is_true;
-  __ tst(input_reg, Operand(kSmiTagMask));
-  __ b(eq, &is_true);
+  __ JumpIfSmi(input_reg, &is_true);
   TrueFalseRoot(result, &is_true);
 }
 
@@ -2164,8 +2143,7 @@ void LCodeGen::DoHasInstanceTypeAndBranch(LHasInstanceTypeAndBranch* instr) {
 
   Label* false_label = chunk_->GetAssemblyLabel(false_block);
 
-  __ tst(input, Operand(kSmiTagMask));
-  __ b(eq, false_label);
+  __ JumpIfSmi(input, false_label);
 
   __ CompareObjectType(input, scratch, scratch, TestType(instr->hydrogen()));
   EmitBranch(true_block, false_block, BranchCondition(instr->hydrogen()));
@@ -2226,8 +2204,7 @@ void LCodeGen::EmitClassOfTest(Label* is_true,
   Label* label;
   ASSERT(!input.is(temp));
   ASSERT(!temp.is(temp2));  // But input and temp2 may be the same register.
-  __ tst(input, Operand(kSmiTagMask));
-  __ b(eq, is_false);
+  __ JumpIfSmi(input, is_false);
   __ CompareObjectType(input, temp, temp2, FIRST_SPEC_OBJECT_TYPE);
   __ b(lt, is_false);
 
@@ -2732,7 +2709,7 @@ void LCodeGen::DoLoadElements(LLoadElements* instr) {
 
   __ ldr(result, FieldMemOperand(input, JSObject::kElementsOffset));
   if (FLAG_debug_code) {
-    Label done;
+    Label done, fail;
     __ ldr(scratch, FieldMemOperand(result, HeapObject::kMapOffset));
     __ LoadRoot(ip, Heap::kFixedArrayMapRootIndex);
     __ cmp(scratch, ip);
@@ -2740,12 +2717,18 @@ void LCodeGen::DoLoadElements(LLoadElements* instr) {
     __ LoadRoot(ip, Heap::kFixedCOWArrayMapRootIndex);
     __ cmp(scratch, ip);
     __ b(eq, &done);
-    __ ldr(scratch, FieldMemOperand(result, HeapObject::kMapOffset));
-    __ ldrb(scratch, FieldMemOperand(scratch, Map::kInstanceTypeOffset));
-    __ sub(scratch, scratch, Operand(FIRST_EXTERNAL_ARRAY_TYPE));
-    __ cmp(scratch, Operand(kExternalArrayTypeCount));
-    __ b(lo, &done);
-    __ Abort("Check for fast elements failed.");
+    // |scratch| still contains |input|'s map.
+    __ ldr(scratch, FieldMemOperand(scratch, Map::kBitField2Offset));
+    __ ubfx(scratch, scratch, Map::kElementsKindShift,
+            Map::kElementsKindBitCount);
+    __ cmp(scratch, Operand(JSObject::FAST_ELEMENTS));
+    __ b(eq, &done);
+    __ cmp(scratch, Operand(JSObject::FIRST_EXTERNAL_ARRAY_ELEMENTS_KIND));
+    __ b(lt, &fail);
+    __ cmp(scratch, Operand(JSObject::LAST_EXTERNAL_ARRAY_ELEMENTS_KIND));
+    __ b(le, &done);
+    __ bind(&fail);
+    __ Abort("Check for fast or external elements failed.");
     __ bind(&done);
   }
 }
@@ -2806,7 +2789,7 @@ void LCodeGen::DoLoadKeyedSpecializedArrayElement(
     LLoadKeyedSpecializedArrayElement* instr) {
   Register external_pointer = ToRegister(instr->external_pointer());
   Register key = no_reg;
-  ExternalArrayType array_type = instr->array_type();
+  JSObject::ElementsKind elements_kind = instr->elements_kind();
   bool key_is_constant = instr->key()->IsConstantOperand();
   int constant_key = 0;
   if (key_is_constant) {
@@ -2817,9 +2800,10 @@ void LCodeGen::DoLoadKeyedSpecializedArrayElement(
   } else {
     key = ToRegister(instr->key());
   }
-  int shift_size = ExternalArrayTypeToShiftSize(array_type);
+  int shift_size = ElementsKindToShiftSize(elements_kind);
 
-  if (array_type == kExternalFloatArray || array_type == kExternalDoubleArray) {
+  if (elements_kind == JSObject::EXTERNAL_FLOAT_ELEMENTS ||
+      elements_kind == JSObject::EXTERNAL_DOUBLE_ELEMENTS) {
     CpuFeatures::Scope scope(VFP3);
     DwVfpRegister result(ToDoubleRegister(instr->result()));
     if (key_is_constant) {
@@ -2829,10 +2813,10 @@ void LCodeGen::DoLoadKeyedSpecializedArrayElement(
       __ mov(scratch0(), Operand(key, LSL, shift_size));
       __ add(scratch0(), scratch0(), external_pointer);
     }
-    if (array_type == kExternalFloatArray) {
+    if (elements_kind == JSObject::EXTERNAL_FLOAT_ELEMENTS) {
       __ vldr(result.low(), scratch0(), 0);
       __ vcvt_f64_f32(result, result.low());
-    } else  {  // i.e. array_type == kExternalDoubleArray
+    } else  {  // i.e. elements_kind == JSObject::EXTERNAL_DOUBLE_ELEMENTS
       __ vldr(result, scratch0(), 0);
     }
   } else {
@@ -2846,24 +2830,24 @@ void LCodeGen::DoLoadKeyedSpecializedArrayElement(
       __ add(scratch0(), scratch0(), external_pointer);
       mem_operand = MemOperand(scratch0(), 0);
     }
-    switch (array_type) {
-      case kExternalByteArray:
+    switch (elements_kind) {
+      case JSObject::EXTERNAL_BYTE_ELEMENTS:
         __ ldrsb(result, mem_operand);
         break;
-      case kExternalUnsignedByteArray:
-      case kExternalPixelArray:
+      case JSObject::EXTERNAL_PIXEL_ELEMENTS:
+      case JSObject::EXTERNAL_UNSIGNED_BYTE_ELEMENTS:
         __ ldrb(result, mem_operand);
         break;
-      case kExternalShortArray:
+      case JSObject::EXTERNAL_SHORT_ELEMENTS:
         __ ldrsh(result, mem_operand);
         break;
-      case kExternalUnsignedShortArray:
+      case JSObject::EXTERNAL_UNSIGNED_SHORT_ELEMENTS:
         __ ldrh(result, mem_operand);
         break;
-      case kExternalIntArray:
+      case JSObject::EXTERNAL_INT_ELEMENTS:
         __ ldr(result, mem_operand);
         break;
-      case kExternalUnsignedIntArray:
+      case JSObject::EXTERNAL_UNSIGNED_INT_ELEMENTS:
         __ ldr(result, mem_operand);
         // TODO(danno): we could be more clever here, perhaps having a special
         // version of the stub that detects if the overflow case actually
@@ -2871,8 +2855,12 @@ void LCodeGen::DoLoadKeyedSpecializedArrayElement(
         __ cmp(result, Operand(0));
         DeoptimizeIf(lt, instr->environment());
         break;
-      case kExternalFloatArray:
-      case kExternalDoubleArray:
+      case JSObject::EXTERNAL_FLOAT_ELEMENTS:
+      case JSObject::EXTERNAL_DOUBLE_ELEMENTS:
+      case JSObject::FAST_DOUBLE_ELEMENTS:
+      case JSObject::FAST_ELEMENTS:
+      case JSObject::DICTIONARY_ELEMENTS:
+      case JSObject::NON_STRICT_ARGUMENTS_ELEMENTS:
         UNREACHABLE();
         break;
     }
@@ -3057,8 +3045,7 @@ void LCodeGen::DoOuterContext(LOuterContext* instr) {
   Register context = ToRegister(instr->context());
   Register result = ToRegister(instr->result());
   __ ldr(result,
-         MemOperand(context, Context::SlotOffset(Context::CLOSURE_INDEX)));
-  __ ldr(result, FieldMemOperand(result, JSFunction::kContextOffset));
+         MemOperand(context, Context::SlotOffset(Context::PREVIOUS_INDEX)));
 }
 
 
@@ -3671,7 +3658,7 @@ void LCodeGen::DoStoreKeyedSpecializedArrayElement(
 
   Register external_pointer = ToRegister(instr->external_pointer());
   Register key = no_reg;
-  ExternalArrayType array_type = instr->array_type();
+  JSObject::ElementsKind elements_kind = instr->elements_kind();
   bool key_is_constant = instr->key()->IsConstantOperand();
   int constant_key = 0;
   if (key_is_constant) {
@@ -3682,22 +3669,23 @@ void LCodeGen::DoStoreKeyedSpecializedArrayElement(
   } else {
     key = ToRegister(instr->key());
   }
-  int shift_size = ExternalArrayTypeToShiftSize(array_type);
+  int shift_size = ElementsKindToShiftSize(elements_kind);
 
-  if (array_type == kExternalFloatArray || array_type == kExternalDoubleArray) {
+  if (elements_kind == JSObject::EXTERNAL_FLOAT_ELEMENTS ||
+      elements_kind == JSObject::EXTERNAL_DOUBLE_ELEMENTS) {
     CpuFeatures::Scope scope(VFP3);
     DwVfpRegister value(ToDoubleRegister(instr->value()));
     if (key_is_constant) {
       __ add(scratch0(), external_pointer,
-             Operand(constant_key * (1 << shift_size)));
+             Operand(constant_key << shift_size));
     } else {
       __ mov(scratch0(), Operand(key, LSL, shift_size));
       __ add(scratch0(), scratch0(), external_pointer);
     }
-    if (array_type == kExternalFloatArray) {
+    if (elements_kind == JSObject::EXTERNAL_FLOAT_ELEMENTS) {
       __ vcvt_f32_f64(double_scratch0().low(), value);
       __ vstr(double_scratch0().low(), scratch0(), 0);
-    } else {  // i.e. array_type == kExternalDoubleArray
+    } else {  // i.e. elements_kind == JSObject::EXTERNAL_DOUBLE_ELEMENTS
       __ vstr(value, scratch0(), 0);
     }
   } else {
@@ -3705,28 +3693,32 @@ void LCodeGen::DoStoreKeyedSpecializedArrayElement(
     MemOperand mem_operand = MemOperand(no_reg);
     if (key_is_constant) {
       mem_operand = MemOperand(external_pointer,
-                               constant_key * (1 << shift_size));
+                               constant_key << shift_size);
     } else {
       __ mov(scratch0(), Operand(key, LSL, shift_size));
       __ add(scratch0(), scratch0(), external_pointer);
       mem_operand = MemOperand(scratch0(), 0);
     }
-    switch (array_type) {
-      case kExternalPixelArray:
-      case kExternalByteArray:
-      case kExternalUnsignedByteArray:
+    switch (elements_kind) {
+      case JSObject::EXTERNAL_PIXEL_ELEMENTS:
+      case JSObject::EXTERNAL_BYTE_ELEMENTS:
+      case JSObject::EXTERNAL_UNSIGNED_BYTE_ELEMENTS:
         __ strb(value, mem_operand);
         break;
-      case kExternalShortArray:
-      case kExternalUnsignedShortArray:
+      case JSObject::EXTERNAL_SHORT_ELEMENTS:
+      case JSObject::EXTERNAL_UNSIGNED_SHORT_ELEMENTS:
         __ strh(value, mem_operand);
         break;
-      case kExternalIntArray:
-      case kExternalUnsignedIntArray:
+      case JSObject::EXTERNAL_INT_ELEMENTS:
+      case JSObject::EXTERNAL_UNSIGNED_INT_ELEMENTS:
         __ str(value, mem_operand);
         break;
-      case kExternalFloatArray:
-      case kExternalDoubleArray:
+      case JSObject::EXTERNAL_FLOAT_ELEMENTS:
+      case JSObject::EXTERNAL_DOUBLE_ELEMENTS:
+      case JSObject::FAST_DOUBLE_ELEMENTS:
+      case JSObject::FAST_ELEMENTS:
+      case JSObject::DICTIONARY_ELEMENTS:
+      case JSObject::NON_STRICT_ARGUMENTS_ELEMENTS:
         UNREACHABLE();
         break;
     }
@@ -4093,6 +4085,7 @@ void LCodeGen::DoSmiUntag(LSmiUntag* instr) {
 
 void LCodeGen::EmitNumberUntagD(Register input_reg,
                                 DoubleRegister result_reg,
+                                bool deoptimize_on_undefined,
                                 LInstruction* instr) {
   Register scratch = scratch0();
   SwVfpRegister flt_scratch = double_scratch0().low();
@@ -4101,27 +4094,32 @@ void LCodeGen::EmitNumberUntagD(Register input_reg,
   Label load_smi, heap_number, done;
 
   // Smi check.
-  __ tst(input_reg, Operand(kSmiTagMask));
-  __ b(eq, &load_smi);
+  __ JumpIfSmi(input_reg, &load_smi);
 
   // Heap number map check.
   __ ldr(scratch, FieldMemOperand(input_reg, HeapObject::kMapOffset));
   __ LoadRoot(ip, Heap::kHeapNumberMapRootIndex);
-  __ cmp(scratch, Operand(ip));
-  __ b(eq, &heap_number);
+  if (deoptimize_on_undefined) {
+    __ cmp(scratch, Operand(ip));
+    DeoptimizeIf(ne, instr->environment());
+  } else {
+    Label heap_number;
+    __ cmp(scratch, Operand(ip));
+    __ b(eq, &heap_number);
 
-  __ LoadRoot(ip, Heap::kUndefinedValueRootIndex);
-  __ cmp(input_reg, Operand(ip));
-  DeoptimizeIf(ne, instr->environment());
+    __ LoadRoot(ip, Heap::kUndefinedValueRootIndex);
+    __ cmp(input_reg, Operand(ip));  
+    DeoptimizeIf(ne, instr->environment());
 
-  // Convert undefined to NaN.
-  __ LoadRoot(ip, Heap::kNanValueRootIndex);
-  __ sub(ip, ip, Operand(kHeapObjectTag));
-  __ vldr(result_reg, ip, HeapNumber::kValueOffset);
-  __ jmp(&done);
+    // Convert undefined to NaN.
+    __ LoadRoot(ip, Heap::kNanValueRootIndex);
+    __ sub(ip, ip, Operand(kHeapObjectTag));
+    __ vldr(result_reg, ip, HeapNumber::kValueOffset);
+    __ jmp(&done);
 
+    __ bind(&heap_number);
+  }
   // Heap number to double register conversion.
-  __ bind(&heap_number);
   __ sub(ip, input_reg, Operand(kHeapObjectTag));
   __ vldr(result_reg, ip, HeapNumber::kValueOffset);
   __ jmp(&done);
@@ -4265,7 +4263,9 @@ void LCodeGen::DoNumberUntagD(LNumberUntagD* instr) {
   Register input_reg = ToRegister(input);
   DoubleRegister result_reg = ToDoubleRegister(result);
 
-  EmitNumberUntagD(input_reg, result_reg, instr);
+  EmitNumberUntagD(input_reg, result_reg,
+                   instr->hydrogen()->deoptimize_on_undefined(),
+                   instr);
 }
 
 
@@ -4824,15 +4824,42 @@ void LCodeGen::DoIn(LIn* instr) {
 }
 
 
+void LCodeGen::DoDeferredStackCheck(LStackCheck* instr) {
+  PushSafepointRegistersScope scope(this, Safepoint::kWithRegisters);
+  CallRuntimeFromDeferred(Runtime::kStackGuard, 0, instr);
+}
+
+
 void LCodeGen::DoStackCheck(LStackCheck* instr) {
-  // Perform stack overflow check.
-  Label ok;
-  __ LoadRoot(ip, Heap::kStackLimitRootIndex);
-  __ cmp(sp, Operand(ip));
-  __ b(hs, &ok);
-  StackCheckStub stub;
-  CallCode(stub.GetCode(), RelocInfo::CODE_TARGET, instr);
-  __ bind(&ok);
+  class DeferredStackCheck: public LDeferredCode {
+   public:
+    DeferredStackCheck(LCodeGen* codegen, LStackCheck* instr)
+        : LDeferredCode(codegen), instr_(instr) { }
+    virtual void Generate() { codegen()->DoDeferredStackCheck(instr_); }
+   private:
+    LStackCheck* instr_;
+  };
+
+  if (instr->hydrogen()->is_function_entry()) {
+    // Perform stack overflow check.
+    Label done;
+    __ LoadRoot(ip, Heap::kStackLimitRootIndex);
+    __ cmp(sp, Operand(ip));
+    __ b(hs, &done);
+    StackCheckStub stub;
+    CallCode(stub.GetCode(), RelocInfo::CODE_TARGET, instr);
+    __ bind(&done);
+  } else {
+    ASSERT(instr->hydrogen()->is_backwards_branch());
+    // Perform stack overflow check if this goto needs it before jumping.
+    DeferredStackCheck* deferred_stack_check =
+        new DeferredStackCheck(this, instr);
+    __ LoadRoot(ip, Heap::kStackLimitRootIndex);
+    __ cmp(sp, Operand(ip));
+    __ b(lo, deferred_stack_check->entry());
+    __ bind(instr->done_label());
+    deferred_stack_check->SetExit(instr->done_label());
+  }
 }
 
 

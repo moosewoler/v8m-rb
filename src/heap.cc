@@ -153,6 +153,15 @@ Heap::Heap()
   max_semispace_size_ = reserved_semispace_size_ = V8_MAX_SEMISPACE_SIZE;
 #endif
 
+  intptr_t max_virtual = OS::MaxVirtualMemory();
+
+  if (max_virtual > 0) {
+    if (code_range_size_ > 0) {
+      // Reserve no more than 1/8 of the memory for the code range.
+      code_range_size_ = Min(code_range_size_, max_virtual >> 3);
+    }
+  }
+
   memset(roots_, 0, sizeof(roots_[0]) * kRootListLength);
   global_contexts_list_ = NULL;
   mark_compact_collector_.heap_ = this;
@@ -513,11 +522,6 @@ bool Heap::CollectGarbage(AllocationSpace space, GarbageCollector collector) {
 
     GarbageCollectionEpilogue();
   }
-
-
-#ifdef ENABLE_LOGGING_AND_PROFILING
-  if (FLAG_log_gc) HeapProfiler::WriteSample();
-#endif
 
   return next_gc_likely_to_collect_more;
 }
@@ -1286,6 +1290,7 @@ class ScavengingVisitor : public StaticVisitorBase {
     table_.Register(kVisitShortcutCandidate, &EvacuateShortcutCandidate);
     table_.Register(kVisitByteArray, &EvacuateByteArray);
     table_.Register(kVisitFixedArray, &EvacuateFixedArray);
+    table_.Register(kVisitFixedDoubleArray, &EvacuateFixedDoubleArray);
 
     table_.Register(kVisitGlobalContext,
                     &ObjectEvacuationStrategy<POINTER_OBJECT>::
@@ -1430,6 +1435,18 @@ class ScavengingVisitor : public StaticVisitorBase {
                                                  slot,
                                                  object,
                                                  object_size);
+  }
+
+
+  static inline void EvacuateFixedDoubleArray(Map* map,
+                                              HeapObject** slot,
+                                              HeapObject* object) {
+    int length = reinterpret_cast<FixedDoubleArray*>(object)->length();
+    int object_size = FixedDoubleArray::SizeFor(length);
+    EvacuateObject<DATA_OBJECT, UNKNOWN_SIZE>(map,
+                                              slot,
+                                              object,
+                                              object_size);
   }
 
 
@@ -1772,6 +1789,12 @@ bool Heap::CreateInitialMaps() {
   Map::cast(obj)->set_is_undetectable();
 
   { MaybeObject* maybe_obj =
+        AllocateMap(FIXED_DOUBLE_ARRAY_TYPE, kVariableSizeSentinel);
+    if (!maybe_obj->ToObject(&obj)) return false;
+  }
+  set_fixed_double_array_map(Map::cast(obj));
+
+  { MaybeObject* maybe_obj =
         AllocateMap(BYTE_ARRAY_TYPE, kVariableSizeSentinel);
     if (!maybe_obj->ToObject(&obj)) return false;
   }
@@ -1830,6 +1853,12 @@ bool Heap::CreateInitialMaps() {
   }
   set_external_float_array_map(Map::cast(obj));
 
+  { MaybeObject* maybe_obj =
+        AllocateMap(FIXED_ARRAY_TYPE, kVariableSizeSentinel);
+    if (!maybe_obj->ToObject(&obj)) return false;
+  }
+  set_non_strict_arguments_elements_map(Map::cast(obj));
+
   { MaybeObject* maybe_obj = AllocateMap(EXTERNAL_DOUBLE_ARRAY_TYPE,
                                          ExternalArray::kAlignedSize);
     if (!maybe_obj->ToObject(&obj)) return false;
@@ -1875,13 +1904,19 @@ bool Heap::CreateInitialMaps() {
         AllocateMap(FIXED_ARRAY_TYPE, kVariableSizeSentinel);
     if (!maybe_obj->ToObject(&obj)) return false;
   }
-  set_context_map(Map::cast(obj));
+  set_function_context_map(Map::cast(obj));
 
   { MaybeObject* maybe_obj =
         AllocateMap(FIXED_ARRAY_TYPE, kVariableSizeSentinel);
     if (!maybe_obj->ToObject(&obj)) return false;
   }
   set_catch_context_map(Map::cast(obj));
+
+  { MaybeObject* maybe_obj =
+        AllocateMap(FIXED_ARRAY_TYPE, kVariableSizeSentinel);
+    if (!maybe_obj->ToObject(&obj)) return false;
+  }
+  set_with_context_map(Map::cast(obj));
 
   { MaybeObject* maybe_obj =
         AllocateMap(FIXED_ARRAY_TYPE, kVariableSizeSentinel);
@@ -2599,12 +2634,13 @@ MaybeObject* Heap::AllocateConsString(String* first, String* second) {
 
 
 MaybeObject* Heap::AllocateSubString(String* buffer,
-                                int start,
-                                int end,
-                                PretenureFlag pretenure) {
+                                     int start,
+                                     int end,
+                                     PretenureFlag pretenure) {
   int length = end - start;
-
-  if (length == 1) {
+  if (length == 0) {
+    return empty_string();
+  } else if (length == 1) {
     return LookupSingleCharacterStringFromCode(buffer->Get(start));
   } else if (length == 2) {
     // Optimization for 2-byte strings often used as keys in a decompression
@@ -2944,9 +2980,6 @@ MaybeObject* Heap::Allocate(Map* map, AllocationSpace space) {
     if (!maybe_result->ToObject(&result)) return maybe_result;
   }
   HeapObject::cast(result)->set_map(map);
-#ifdef ENABLE_LOGGING_AND_PROFILING
-  isolate_->producer_heap_profile()->RecordJSObjectAllocation(result);
-#endif
   return result;
 }
 
@@ -3395,9 +3428,6 @@ MaybeObject* Heap::CopyJSObject(JSObject* source) {
     JSObject::cast(clone)->set_properties(FixedArray::cast(prop));
   }
   // Return the new clone.
-#ifdef ENABLE_LOGGING_AND_PROFILING
-  isolate_->producer_heap_profile()->RecordJSObjectAllocation(clone);
-#endif
   return clone;
 }
 
@@ -3812,6 +3842,62 @@ MaybeObject* Heap::AllocateUninitializedFixedArray(int length) {
 }
 
 
+MaybeObject* Heap::AllocateEmptyFixedDoubleArray() {
+  int size = FixedDoubleArray::SizeFor(0);
+  Object* result;
+  { MaybeObject* maybe_result =
+        AllocateRaw(size, OLD_DATA_SPACE, OLD_DATA_SPACE);
+    if (!maybe_result->ToObject(&result)) return maybe_result;
+  }
+  // Initialize the object.
+  reinterpret_cast<FixedDoubleArray*>(result)->set_map(
+      fixed_double_array_map());
+  reinterpret_cast<FixedDoubleArray*>(result)->set_length(0);
+  return result;
+}
+
+
+MaybeObject* Heap::AllocateUninitializedFixedDoubleArray(
+    int length,
+    PretenureFlag pretenure) {
+  if (length == 0) return empty_fixed_double_array();
+
+  Object* obj;
+  { MaybeObject* maybe_obj = AllocateRawFixedDoubleArray(length, pretenure);
+    if (!maybe_obj->ToObject(&obj)) return maybe_obj;
+  }
+
+  reinterpret_cast<FixedDoubleArray*>(obj)->set_map(fixed_double_array_map());
+  FixedDoubleArray::cast(obj)->set_length(length);
+  return obj;
+}
+
+
+MaybeObject* Heap::AllocateRawFixedDoubleArray(int length,
+                                               PretenureFlag pretenure) {
+  if (length < 0 || length > FixedDoubleArray::kMaxLength) {
+    return Failure::OutOfMemoryException();
+  }
+
+  AllocationSpace space =
+      (pretenure == TENURED) ? OLD_DATA_SPACE : NEW_SPACE;
+  int size = FixedDoubleArray::SizeFor(length);
+  if (space == NEW_SPACE && size > kMaxObjectSizeInNewSpace) {
+    // Too big for new space.
+    space = LO_SPACE;
+  } else if (space == OLD_DATA_SPACE &&
+             size > MaxObjectSizeInPagedSpace()) {
+    // Too big for old data space.
+    space = LO_SPACE;
+  }
+
+  AllocationSpace retry_space =
+      (size <= MaxObjectSizeInPagedSpace()) ? OLD_DATA_SPACE : LO_SPACE;
+
+  return AllocateRaw(size, space, retry_space);
+}
+
+
 MaybeObject* Heap::AllocateHashTable(int length, PretenureFlag pretenure) {
   Object* result;
   { MaybeObject* maybe_result = AllocateFixedArray(length, pretenure);
@@ -3844,38 +3930,51 @@ MaybeObject* Heap::AllocateFunctionContext(int length, JSFunction* function) {
     if (!maybe_result->ToObject(&result)) return maybe_result;
   }
   Context* context = reinterpret_cast<Context*>(result);
-  context->set_map(context_map());
+  context->set_map(function_context_map());
   context->set_closure(function);
   context->set_fcontext(context);
-  context->set_previous(NULL);
+  context->set_previous(function->context());
   context->set_extension(NULL);
   context->set_global(function->context()->global());
-  ASSERT(!context->IsGlobalContext());
-  ASSERT(context->is_function_context());
-  ASSERT(result->IsContext());
-  return result;
+  return context;
+}
+
+
+MaybeObject* Heap::AllocateCatchContext(Context* previous,
+                                        String* name,
+                                        Object* thrown_object) {
+  STATIC_ASSERT(Context::MIN_CONTEXT_SLOTS == Context::THROWN_OBJECT_INDEX);
+  Object* result;
+  { MaybeObject* maybe_result =
+        AllocateFixedArray(Context::MIN_CONTEXT_SLOTS + 1);
+    if (!maybe_result->ToObject(&result)) return maybe_result;
+  }
+  Context* context = reinterpret_cast<Context*>(result);
+  context->set_map(catch_context_map());
+  context->set_closure(previous->closure());
+  context->set_fcontext(previous->fcontext());
+  context->set_previous(previous);
+  context->set_extension(name);
+  context->set_global(previous->global());
+  context->set(Context::THROWN_OBJECT_INDEX, thrown_object);
+  return context;
 }
 
 
 MaybeObject* Heap::AllocateWithContext(Context* previous,
-                                       JSObject* extension,
-                                       bool is_catch_context) {
+                                       JSObject* extension) {
   Object* result;
   { MaybeObject* maybe_result = AllocateFixedArray(Context::MIN_CONTEXT_SLOTS);
     if (!maybe_result->ToObject(&result)) return maybe_result;
   }
   Context* context = reinterpret_cast<Context*>(result);
-  context->set_map(is_catch_context ? catch_context_map() :
-      context_map());
+  context->set_map(with_context_map());
   context->set_closure(previous->closure());
   context->set_fcontext(previous->fcontext());
   context->set_previous(previous);
   context->set_extension(extension);
   context->set_global(previous->global());
-  ASSERT(!context->IsGlobalContext());
-  ASSERT(!context->is_function_context());
-  ASSERT(result->IsContext());
-  return result;
+  return context;
 }
 
 
@@ -5012,11 +5111,6 @@ bool Heap::Setup(bool create_heap_objects) {
 
   LOG(isolate_, IntPtrTEvent("heap-capacity", Capacity()));
   LOG(isolate_, IntPtrTEvent("heap-available", Available()));
-
-#ifdef ENABLE_LOGGING_AND_PROFILING
-  // This should be called only after initial objects have been created.
-  isolate_->producer_heap_profile()->Setup();
-#endif
 
   return true;
 }

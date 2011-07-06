@@ -1215,6 +1215,8 @@ int32_t Simulator::get_pc() const {
 int Simulator::ReadW(int32_t addr, Instruction* instr) {
   if (addr >=0 && addr < 0x400) {
     // This has to be a NULL-dereference, drop into debugger.
+    PrintF("Memory read from bad address: 0x%08x, pc=0x%08x\n",
+           addr, reinterpret_cast<intptr_t>(instr));
     MipsDebugger dbg(this);
     dbg.Debug();
   }
@@ -1234,6 +1236,8 @@ int Simulator::ReadW(int32_t addr, Instruction* instr) {
 void Simulator::WriteW(int32_t addr, int value, Instruction* instr) {
   if (addr >= 0 && addr < 0x400) {
     // This has to be a NULL-dereference, drop into debugger.
+    PrintF("Memory write to bad address: 0x%08x, pc=0x%08x\n",
+           addr, reinterpret_cast<intptr_t>(instr));
     MipsDebugger dbg(this);
     dbg.Debug();
   }
@@ -1484,7 +1488,7 @@ void Simulator::SoftwareInterrupt(Instruction* instr) {
           case ExternalReference::BUILTIN_FP_CALL:
             GetFpArgs(&dval0);
             PrintF("Call to host function at %p with arg %f",
-                FUNCTION_ADDR(target), dval1);
+                FUNCTION_ADDR(target), dval0);
             break;
           case ExternalReference::BUILTIN_FP_INT_CALL:
             GetFpArgs(&dval0, &ival);
@@ -2725,7 +2729,7 @@ int32_t Simulator::Call(byte* entry, int argument_count, ...) {
   // Store remaining arguments on stack, from low to high memory.
   intptr_t* stack_argument = reinterpret_cast<intptr_t*>(entry_stack);
   for (int i = 4; i < argument_count; i++) {
-    stack_argument[i - 4 + kArgsSlotsNum] = va_arg(parameters, int32_t);
+    stack_argument[i - 4 + kCArgSlotCount] = va_arg(parameters, int32_t);
   }
   va_end(parameters);
   set_register(sp, entry_stack);

@@ -850,18 +850,19 @@ void MacroAssembler::Trunc_uw_d(FPURegister fd, FPURegister fs) {
 
 void MacroAssembler::Trunc_uw_d(FPURegister fd, Register rs) {
   ASSERT(!fd.is(f22));
-  ASSERT(!rs.is(t6));
+  ASSERT(!rs.is(t8));
 
   // Load 2^31 into f22.
-  Or(t6, zero_reg, 0x80000000);
-  Cvt_d_uw(f22, t6);
+  Or(t8, zero_reg, 0x80000000);
+  Cvt_d_uw(f22, t8);
 
   // Test if f22 > fd.
-  c(OLT, D, fd, f22);
-
-  Label simple_convert;
   // If fd < 2^31 we can convert it normally.
-  bc1t(&simple_convert);
+  Label simple_convert;
+  // TODO(kalmard): the fd == NaN case is not covered in this function.
+  // We could toggle the appropriate FSCR bit but this function is rarely used
+  // (if at all) and never in such an environment.
+  BranchF(&simple_convert, NULL, lt, fd, f22);
 
   // First we subtract 2^31 from fd, then trunc it to rs
   // and add 2^31 to rs.
@@ -869,7 +870,7 @@ void MacroAssembler::Trunc_uw_d(FPURegister fd, Register rs) {
   sub_d(f22, fd, f22);
   trunc_w_d(f22, f22);
   mfc1(rs, f22);
-  or_(rs, rs, t6);
+  or_(rs, rs, t8);
 
   Label done;
   Branch(&done);
@@ -879,6 +880,84 @@ void MacroAssembler::Trunc_uw_d(FPURegister fd, Register rs) {
   mfc1(rs, f22);
 
   bind(&done);
+}
+
+
+void MacroAssembler::BranchF(Label* target,
+                             Label* nan,
+                             Condition cc,
+                             FPURegister cmp1,
+                             FPURegister cmp2,
+                             BranchDelaySlot bd) {
+  if (cc == al) {
+    Branch(bd, target);
+    return;
+  }
+
+  ASSERT(nan || target);
+  // Check for unordered (NaN) cases.
+  if (nan) {
+    c(UN, D, cmp1, cmp2);
+    bc1t(nan);
+  }
+
+  if (target) {
+    // Now we can check for 'unordered or ...' cases, as !unordered is
+    // guaranteed here (or if nan is not set, we assume the caller handled
+    // it somewhere else).
+    // TODO(kalmard): Can unsigned conditions be treated as signed? Seems
+    // to be working...
+    switch (cc) {
+      case Uless:
+      case less:
+        c(OLT, D, cmp1, cmp2);
+        bc1t(target);
+        break;
+      case Ugreater:
+      case greater:
+        c(ULE, D, cmp1, cmp2);
+        bc1f(target);
+        break;
+      case Ugreater_equal:
+      case greater_equal:
+        c(ULT, D, cmp1, cmp2);
+        bc1f(target);
+        break;
+      case Uless_equal:
+      case less_equal:
+        c(OLE, D, cmp1, cmp2);
+        bc1t(target);
+        break;
+      case eq:
+        c(EQ, D, cmp1, cmp2);
+        bc1t(target);
+        break;
+      case ne:
+        c(EQ, D, cmp1, cmp2);
+        bc1f(target);
+        break;
+      default:
+        CHECK(0);
+    };
+  }
+
+  if (bd == PROTECT) {
+    nop();
+  }
+}
+
+void MacroAssembler::Move(FPURegister dst, double imm) {
+  ASSERT(CpuFeatures::IsEnabled(FPU));
+  uint32_t lo, hi;
+  DoubleAsTwoUInt32(imm, &lo, &hi);
+  // Move the low part of the double into the lower of the corresponding FPU
+  // register of FPU register pair.
+  li(at, Operand(lo));
+  mtc1(at, dst);
+  // Move the high part of the double into the higher of the corresponding FPU
+  // register of FPU register pair.
+  li(at, Operand(hi));
+  mtc1(at, FPURegister::from_code(dst.code() + 1));
 }
 
 
@@ -1130,7 +1209,54 @@ void MacroAssembler::GetLeastBitsFromInt32(Register dst,
     (cond != cc_always && (!rs.is(zero_reg) || !rt.rm().is(zero_reg))))
 
 
+bool MacroAssembler::UseAbsoluteCodePointers() {
+  if (is_trampoline_emitted()) {
+    return true;
+  } else {
+    return false;
+  }
+}
+
+
 void MacroAssembler::Branch(int16_t offset, BranchDelaySlot bdslot) {
+  BranchShort(offset, bdslot);
+}
+
+
+void MacroAssembler::Branch(int16_t offset, Condition cond, Register rs,
+                            const Operand& rt,
+                            BranchDelaySlot bdslot) {
+  BranchShort(offset, cond, rs, rt, bdslot);
+}
+
+
+void MacroAssembler::Branch(Label* L, BranchDelaySlot bdslot) {
+  bool is_label_near = is_near(L);
+  if (UseAbsoluteCodePointers() && !is_label_near) {
+    Jr(L, bdslot);
+  } else {
+    BranchShort(L, bdslot);
+  }
+}
+
+
+void MacroAssembler::Branch(Label* L, Condition cond, Register rs,
+                            const Operand& rt,
+                            BranchDelaySlot bdslot) {
+  bool is_label_near = is_near(L);
+  if (UseAbsoluteCodePointers() && !is_label_near) {
+    Label skip;
+    Condition neg_cond = NegateCondition(cond);
+    BranchShort(&skip, neg_cond, rs, rt);
+    Jr(L, bdslot);
+    bind(&skip);
+  } else {
+    BranchShort(L, cond, rs, rt, bdslot);
+  }
+}
+
+
+void MacroAssembler::BranchShort(int16_t offset, BranchDelaySlot bdslot) {
   b(offset);
 
   // Emit a nop in the branch delay slot if required.
@@ -1139,9 +1265,9 @@ void MacroAssembler::Branch(int16_t offset, BranchDelaySlot bdslot) {
 }
 
 
-void MacroAssembler::Branch(int16_t offset, Condition cond, Register rs,
-                            const Operand& rt,
-                            BranchDelaySlot bdslot) {
+void MacroAssembler::BranchShort(int16_t offset, Condition cond, Register rs,
+                                 const Operand& rt,
+                                 BranchDelaySlot bdslot) {
   BRANCH_ARGS_CHECK(cond, rs, rt);
   ASSERT(!rs.is(zero_reg));
   Register r2 = no_reg;
@@ -1214,7 +1340,8 @@ void MacroAssembler::Branch(int16_t offset, Condition cond, Register rs,
         break;
       case Uless:
         if (r2.is(zero_reg)) {
-          b(offset);
+          // No code needs to be emitted.
+          return;
         } else {
           sltu(scratch, rs, r2);
           bne(scratch, zero_reg, offset);
@@ -1273,7 +1400,7 @@ void MacroAssembler::Branch(int16_t offset, Condition cond, Register rs,
         } else {
           r2 = scratch;
           li(r2, rt);
-          sltu(scratch, rs, r2);
+          slt(scratch, rs, r2);
           beq(scratch, zero_reg, offset);
         }
         break;
@@ -1326,7 +1453,8 @@ void MacroAssembler::Branch(int16_t offset, Condition cond, Register rs,
         break;
       case Uless:
         if (rt.imm32_ == 0) {
-          b(offset);
+          // No code needs to be emitted.
+          return;
         } else if (is_int16(rt.imm32_)) {
           sltiu(scratch, rs, rt.imm32_);
           bne(scratch, zero_reg, offset);
@@ -1357,7 +1485,7 @@ void MacroAssembler::Branch(int16_t offset, Condition cond, Register rs,
 }
 
 
-void MacroAssembler::Branch(Label* L, BranchDelaySlot bdslot) {
+void MacroAssembler::BranchShort(Label* L, BranchDelaySlot bdslot) {
   // We use branch_offset as an argument for the branch instructions to be sure
   // it is called just before generating the branch instruction, as needed.
 
@@ -1369,9 +1497,9 @@ void MacroAssembler::Branch(Label* L, BranchDelaySlot bdslot) {
 }
 
 
-void MacroAssembler::Branch(Label* L, Condition cond, Register rs,
-                            const Operand& rt,
-                            BranchDelaySlot bdslot) {
+void MacroAssembler::BranchShort(Label* L, Condition cond, Register rs,
+                                 const Operand& rt,
+                                 BranchDelaySlot bdslot) {
   BRANCH_ARGS_CHECK(cond, rs, rt);
 
   int32_t offset;
@@ -1459,8 +1587,8 @@ void MacroAssembler::Branch(Label* L, Condition cond, Register rs,
         break;
       case Uless:
         if (r2.is(zero_reg)) {
-          offset = shifted_branch_offset(L, false);
-          b(offset);
+          // No code needs to be emitted.
+          return;
         } else {
           sltu(scratch, rs, r2);
           offset = shifted_branch_offset(L, false);
@@ -1525,7 +1653,7 @@ void MacroAssembler::Branch(Label* L, Condition cond, Register rs,
         } else {
           r2 = scratch;
           li(r2, rt);
-          sltu(scratch, rs, r2);
+          slt(scratch, rs, r2);
           offset = shifted_branch_offset(L, false);
           beq(scratch, zero_reg, offset);
         }
@@ -1589,8 +1717,8 @@ void MacroAssembler::Branch(Label* L, Condition cond, Register rs,
         break;
      case Uless:
         if (rt.imm32_ == 0) {
-          offset = shifted_branch_offset(L, false);
-          b(offset);
+          // No code needs to be emitted.
+          return;
         } else if (is_int16(rt.imm32_)) {
           sltiu(scratch, rs, rt.imm32_);
           offset = shifted_branch_offset(L, false);
@@ -1627,11 +1755,49 @@ void MacroAssembler::Branch(Label* L, Condition cond, Register rs,
 }
 
 
+void MacroAssembler::BranchAndLink(int16_t offset, BranchDelaySlot bdslot) {
+  BranchAndLinkShort(offset, bdslot);
+}
+
+
+void MacroAssembler::BranchAndLink(int16_t offset, Condition cond, Register rs,
+                                   const Operand& rt,
+                                   BranchDelaySlot bdslot) {
+  BranchAndLinkShort(offset, cond, rs, rt, bdslot);
+}
+
+
+void MacroAssembler::BranchAndLink(Label* L, BranchDelaySlot bdslot) {
+  bool is_label_near = is_near(L);
+  if (UseAbsoluteCodePointers() && !is_label_near) {
+    Jalr(L, bdslot);
+  } else {
+    BranchAndLinkShort(L, bdslot);
+  }
+}
+
+
+void MacroAssembler::BranchAndLink(Label* L, Condition cond, Register rs,
+                                   const Operand& rt,
+                                   BranchDelaySlot bdslot) {
+  bool is_label_near = is_near(L);
+  if (UseAbsoluteCodePointers() && !is_label_near) {
+    Label skip;
+    Condition neg_cond = NegateCondition(cond);
+    BranchShort(&skip, neg_cond, rs, rt);
+    Jalr(L, bdslot);
+    bind(&skip);
+  } else {
+    BranchAndLinkShort(L, cond, rs, rt, bdslot);
+  }
+}
+
+
 // We need to use a bgezal or bltzal, but they can't be used directly with the
 // slt instructions. We could use sub or add instead but we would miss overflow
 // cases, so we keep slt and add an intermediate third instruction.
-void MacroAssembler::BranchAndLink(int16_t offset,
-                                   BranchDelaySlot bdslot) {
+void MacroAssembler::BranchAndLinkShort(int16_t offset,
+                                        BranchDelaySlot bdslot) {
   bal(offset);
 
   // Emit a nop in the branch delay slot if required.
@@ -1640,9 +1806,9 @@ void MacroAssembler::BranchAndLink(int16_t offset,
 }
 
 
-void MacroAssembler::BranchAndLink(int16_t offset, Condition cond, Register rs,
-                                   const Operand& rt,
-                                   BranchDelaySlot bdslot) {
+void MacroAssembler::BranchAndLinkShort(int16_t offset, Condition cond,
+                                        Register rs, const Operand& rt,
+                                        BranchDelaySlot bdslot) {
   BRANCH_ARGS_CHECK(cond, rs, rt);
   Register r2 = no_reg;
   Register scratch = at;
@@ -1722,7 +1888,7 @@ void MacroAssembler::BranchAndLink(int16_t offset, Condition cond, Register rs,
 }
 
 
-void MacroAssembler::BranchAndLink(Label* L, BranchDelaySlot bdslot) {
+void MacroAssembler::BranchAndLinkShort(Label* L, BranchDelaySlot bdslot) {
   bal(shifted_branch_offset(L, false));
 
   // Emit a nop in the branch delay slot if required.
@@ -1731,9 +1897,9 @@ void MacroAssembler::BranchAndLink(Label* L, BranchDelaySlot bdslot) {
 }
 
 
-void MacroAssembler::BranchAndLink(Label* L, Condition cond, Register rs,
-                                   const Operand& rt,
-                                   BranchDelaySlot bdslot) {
+void MacroAssembler::BranchAndLinkShort(Label* L, Condition cond, Register rs,
+                                        const Operand& rt,
+                                        BranchDelaySlot bdslot) {
   BRANCH_ARGS_CHECK(cond, rs, rt);
 
   int32_t offset;
@@ -1822,6 +1988,64 @@ void MacroAssembler::BranchAndLink(Label* L, Condition cond, Register rs,
 
   // Check that offset could actually hold on an int16_t.
   ASSERT(is_int16(offset));
+
+  // Emit a nop in the branch delay slot if required.
+  if (bdslot == PROTECT)
+    nop();
+}
+
+
+void MacroAssembler::J(Label* L, BranchDelaySlot bdslot) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
+
+  uint32_t imm28;
+  imm28 = jump_address(L);
+  imm28 &= kImm28Mask;
+  { BlockGrowBufferScope block_buf_growth(this);
+    // Buffer growth (and relocation) must be blocked for internal references
+    // until associated instructions are emitted and available to be patched.
+    RecordRelocInfo(RelocInfo::INTERNAL_REFERENCE);
+    j(imm28);
+  }
+  // Emit a nop in the branch delay slot if required.
+  if (bdslot == PROTECT)
+    nop();
+}
+
+
+void MacroAssembler::Jr(Label* L, BranchDelaySlot bdslot) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
+
+  uint32_t imm32;
+  imm32 = jump_address(L);
+  { BlockGrowBufferScope block_buf_growth(this);
+    // Buffer growth (and relocation) must be blocked for internal references
+    // until associated instructions are emitted and available to be patched.
+    RecordRelocInfo(RelocInfo::INTERNAL_REFERENCE);
+    lui(at, (imm32 & kHiMask) >> kLuiShift);
+    ori(at, at, (imm32 & kImm16Mask));
+  }
+  jr(at);
+
+  // Emit a nop in the branch delay slot if required.
+  if (bdslot == PROTECT)
+    nop();
+}
+
+
+void MacroAssembler::Jalr(Label* L, BranchDelaySlot bdslot) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
+
+  uint32_t imm32;
+  imm32 = jump_address(L);
+  { BlockGrowBufferScope block_buf_growth(this);
+    // Buffer growth (and relocation) must be blocked for internal references
+    // until associated instructions are emitted and available to be patched.
+    RecordRelocInfo(RelocInfo::INTERNAL_REFERENCE);
+    lui(at, (imm32 & kHiMask) >> kLuiShift);
+    ori(at, at, (imm32 & kImm16Mask));
+  }
+  jalr(at);
 
   // Emit a nop in the branch delay slot if required.
   if (bdslot == PROTECT)
@@ -2574,8 +2798,8 @@ void MacroAssembler::AllocateHeapNumberWithValue(Register result,
                                                  Register scratch1,
                                                  Register scratch2,
                                                  Label* gc_required) {
-  LoadRoot(t6, Heap::kHeapNumberMapRootIndex);
-  AllocateHeapNumber(result, scratch1, scratch2, t6, gc_required);
+  LoadRoot(t8, Heap::kHeapNumberMapRootIndex);
+  AllocateHeapNumber(result, scratch1, scratch2, t8, gc_required);
   sdc1(value, FieldMemOperand(result, HeapNumber::kValueOffset));
 }
 
@@ -2668,9 +2892,8 @@ void MacroAssembler::CheckFastElements(Register map,
                                        Register scratch,
                                        Label* fail) {
   STATIC_ASSERT(JSObject::FAST_ELEMENTS == 0);
-  lbu(scratch, FieldMemOperand(map, Map::kBitField2Offset));
-  And(scratch, scratch, Operand(Map::kMaximumBitField2FastElementValue));
-  Branch(fail, hi, scratch, Operand(zero_reg));
+  lbu(scratch, FieldMemOperand(map, Map::kInstanceTypeOffset));
+  Branch(fail, hi, scratch, Operand(Map::kMaximumBitField2FastElementValue));
 }
 
 
@@ -2869,8 +3092,10 @@ void MacroAssembler::InvokeCode(Register code,
   InvokePrologue(expected, actual, Handle<Code>::null(), code, &done, flag,
                  call_wrapper, call_kind);
   if (flag == CALL_FUNCTION) {
+    call_wrapper.BeforeCall(CallSize(code));
     SetCallKind(t1, call_kind);
     Call(code);
+    call_wrapper.AfterCall();
   } else {
     ASSERT(flag == JUMP_FUNCTION);
     SetCallKind(t1, call_kind);
@@ -3264,23 +3489,18 @@ void MacroAssembler::AdduAndCheckForOverflow(Register dst,
   ASSERT(!overflow_dst.is(right));
   ASSERT(!left.is(right));
 
-  // TODO(kalmard) There must be a way to optimize dst == left and dst == right
-  // cases.
-
   if (dst.is(left)) {
-    addu(overflow_dst, left, right);
-    xor_(dst, overflow_dst, left);
-    xor_(scratch, overflow_dst, right);
-    and_(scratch, scratch, dst);
-    mov(dst, overflow_dst);
-    mov(overflow_dst, scratch);
+    mov(scratch, left);  // Preserve left.
+    addu(dst, left, right);  // Left is overwritten.
+    xor_(scratch, dst, scratch);  // Original left.
+    xor_(overflow_dst, dst, right);
+    and_(overflow_dst, overflow_dst, scratch);
   } else if (dst.is(right)) {
-    addu(overflow_dst, left, right);
-    xor_(dst, overflow_dst, right);
-    xor_(scratch, overflow_dst, left);
-    and_(scratch, scratch, dst);
-    mov(dst, overflow_dst);
-    mov(overflow_dst, scratch);
+    mov(scratch, right);  // Preserve right.
+    addu(dst, left, right);  // Right is overwritten.
+    xor_(scratch, dst, scratch);  // Original right.
+    xor_(overflow_dst, dst, left);
+    and_(overflow_dst, overflow_dst, scratch);
   } else {
     addu(dst, left, right);
     xor_(overflow_dst, dst, left);
@@ -3304,23 +3524,18 @@ void MacroAssembler::SubuAndCheckForOverflow(Register dst,
   ASSERT(!scratch.is(left));
   ASSERT(!scratch.is(right));
 
-  // TODO(kalmard) There must be a way to optimize dst == left and dst == right
-  // cases.
-
   if (dst.is(left)) {
-    subu(overflow_dst, left, right);
-    xor_(scratch, overflow_dst, left);
-    xor_(dst, left, right);
-    and_(scratch, scratch, dst);
-    mov(dst, overflow_dst);
-    mov(overflow_dst, scratch);
+    mov(scratch, left);  // Preserve left.
+    subu(dst, left, right);  // Left is overwritten.
+    xor_(overflow_dst, dst, scratch);  // scratch is original left.
+    xor_(scratch, scratch, right);  // scratch is original left.
+    and_(overflow_dst, scratch, overflow_dst);
   } else if (dst.is(right)) {
-    subu(overflow_dst, left, right);
-    xor_(dst, left, right);
-    xor_(scratch, overflow_dst, left);
-    and_(scratch, scratch, dst);
-    mov(dst, overflow_dst);
-    mov(overflow_dst, scratch);
+    mov(scratch, right);  // Preserve right.
+    subu(dst, left, right);  // Right is overwritten.
+    xor_(overflow_dst, dst, left);
+    xor_(scratch, left, scratch);  // Original right.
+    and_(overflow_dst, scratch, overflow_dst);
   } else {
     subu(dst, left, right);
     xor_(overflow_dst, dst, left);
@@ -3586,12 +3801,9 @@ void MacroAssembler::Abort(const char* msg) {
 void MacroAssembler::LoadContext(Register dst, int context_chain_length) {
   if (context_chain_length > 0) {
     // Move up the chain of contexts to the context containing the slot.
-    lw(dst, MemOperand(cp, Context::SlotOffset(Context::CLOSURE_INDEX)));
-    // Load the function context (which is the incoming, outer context).
-    lw(dst, FieldMemOperand(dst, JSFunction::kContextOffset));
+    lw(dst, MemOperand(cp, Context::SlotOffset(Context::PREVIOUS_INDEX)));
     for (int i = 1; i < context_chain_length; i++) {
-      lw(dst, MemOperand(dst, Context::SlotOffset(Context::CLOSURE_INDEX)));
-      lw(dst, FieldMemOperand(dst, JSFunction::kContextOffset));
+      lw(dst, MemOperand(dst, Context::SlotOffset(Context::PREVIOUS_INDEX)));
     }
   } else {
     // Slot is in the current function context.  Move it into the
@@ -3963,7 +4175,23 @@ void MacroAssembler::JumpIfInstanceTypeIsNotSequentialAscii(Register type,
 
 static const int kRegisterPassedArguments = 4;
 
-void MacroAssembler::PrepareCallCFunction(int num_arguments, Register scratch) {
+int MacroAssembler::CalculateStackPassedWords(int num_reg_arguments,
+                                              int num_double_arguments) {
+  int stack_passed_words = 0;
+  num_reg_arguments += 2 * num_double_arguments;
+
+  // Up to four simple arguments are passed in registers a0..a3.
+  if (num_reg_arguments > kRegisterPassedArguments) {
+    stack_passed_words += num_reg_arguments - kRegisterPassedArguments;
+  }
+  stack_passed_words += kCArgSlotCount;
+  return stack_passed_words;
+}
+
+
+void MacroAssembler::PrepareCallCFunction(int num_reg_arguments,
+                                          int num_double_arguments,
+                                          Register scratch) {
   int frame_alignment = ActivationFrameAlignment();
 
   // Up to four simple arguments are passed in registers a0..a3.
@@ -3971,11 +4199,8 @@ void MacroAssembler::PrepareCallCFunction(int num_arguments, Register scratch) {
   // mips, even though those argument slots are not normally used.
   // Remaining arguments are pushed on the stack, above (higher address than)
   // the argument slots.
-  ASSERT(StandardFrameConstants::kCArgsSlotsSize % kPointerSize == 0);
-  int stack_passed_arguments = ((num_arguments <= kRegisterPassedArguments) ?
-                                 0 : num_arguments - kRegisterPassedArguments) +
-                               (StandardFrameConstants::kCArgsSlotsSize /
-                               kPointerSize);
+  int stack_passed_arguments = CalculateStackPassedWords(
+      num_reg_arguments, num_double_arguments);
   if (frame_alignment > kPointerSize) {
     // Make stack end at alignment and make room for num_arguments - 4 words
     // and the original value of sp.
@@ -3990,26 +4215,53 @@ void MacroAssembler::PrepareCallCFunction(int num_arguments, Register scratch) {
 }
 
 
+void MacroAssembler::PrepareCallCFunction(int num_reg_arguments,
+                                          Register scratch) {
+  PrepareCallCFunction(num_reg_arguments, 0, scratch);
+}
+
+
+void MacroAssembler::CallCFunction(ExternalReference function,
+                                   int num_reg_arguments,
+                                   int num_double_arguments) {
+  CallCFunctionHelper(no_reg,
+                     function,
+                     t8,
+                     num_reg_arguments,
+                     num_double_arguments);
+}
+
+
+void MacroAssembler::CallCFunction(Register function,
+                                   Register scratch,
+                                   int num_reg_arguments,
+                                   int num_double_arguments) {
+  CallCFunctionHelper(function,
+                      ExternalReference::the_hole_value_location(isolate()),
+                      scratch,
+                      num_reg_arguments,
+                      num_double_arguments);
+}
+
+
 void MacroAssembler::CallCFunction(ExternalReference function,
                                    int num_arguments) {
-  CallCFunctionHelper(no_reg, function, t8, num_arguments);
+  CallCFunction(function, num_arguments, 0);
 }
 
 
 void MacroAssembler::CallCFunction(Register function,
                                    Register scratch,
                                    int num_arguments) {
-  CallCFunctionHelper(function,
-                      ExternalReference::the_hole_value_location(isolate()),
-                      scratch,
-                      num_arguments);
+  CallCFunction(function, scratch, num_arguments, 0);
 }
 
 
 void MacroAssembler::CallCFunctionHelper(Register function,
                                          ExternalReference function_reference,
                                          Register scratch,
-                                         int num_arguments) {
+                                         int num_reg_arguments,
+                                         int num_double_arguments) {
   // Make sure that the stack is aligned before calling a C function unless
   // running in the simulator. The simulator has its own alignment check which
   // provides more information.
@@ -4047,11 +4299,8 @@ void MacroAssembler::CallCFunctionHelper(Register function,
 
   Call(function);
 
-  ASSERT(StandardFrameConstants::kCArgsSlotsSize % kPointerSize == 0);
-  int stack_passed_arguments = ((num_arguments <= kRegisterPassedArguments) ?
-                                0 : num_arguments - kRegisterPassedArguments) +
-                               (StandardFrameConstants::kCArgsSlotsSize /
-                               kPointerSize);
+  int stack_passed_arguments = CalculateStackPassedWords(
+      num_reg_arguments, num_double_arguments);
 
   if (OS::ActivationFrameAlignment() > kPointerSize) {
     lw(sp, MemOperand(sp, stack_passed_arguments * kPointerSize));

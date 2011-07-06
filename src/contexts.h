@@ -88,6 +88,8 @@ enum ContextLookupFlags {
   V(JS_ARRAY_MAP_INDEX, Map, js_array_map)\
   V(REGEXP_RESULT_MAP_INDEX, Map, regexp_result_map)\
   V(ARGUMENTS_BOILERPLATE_INDEX, JSObject, arguments_boilerplate) \
+  V(ALIASED_ARGUMENTS_BOILERPLATE_INDEX, JSObject, \
+    aliased_arguments_boilerplate) \
   V(STRICT_MODE_ARGUMENTS_BOILERPLATE_INDEX, JSObject, \
     strict_mode_arguments_boilerplate) \
   V(MESSAGE_LISTENERS_INDEX, JSObject, message_listeners) \
@@ -166,9 +168,6 @@ enum ContextLookupFlags {
 //   the moment we also use it in generated code for context slot accesses -
 //   and there we don't want a loop because of code bloat - but we may not
 //   need it there after all (see comment in codegen_*.cc).
-//
-// - If we cannot get rid of fcontext, consider making 'previous' never NULL
-//   except for the global context. This could simplify Context::Lookup.
 
 class Context: public FixedArray {
  public:
@@ -184,14 +183,21 @@ class Context: public FixedArray {
     CLOSURE_INDEX,
     FCONTEXT_INDEX,
     PREVIOUS_INDEX,
+    // The extension slot is used for either the global object (in global
+    // contexts), eval extension object (function contexts), subject of with
+    // (with contexts), or the variable name (catch contexts).
     EXTENSION_INDEX,
     GLOBAL_INDEX,
     MIN_CONTEXT_SLOTS,
+
+    // This slot holds the thrown value in catch contexts.
+    THROWN_OBJECT_INDEX = MIN_CONTEXT_SLOTS,
 
     // These slots are only in global contexts.
     GLOBAL_PROXY_INDEX = MIN_CONTEXT_SLOTS,
     SECURITY_TOKEN_INDEX,
     ARGUMENTS_BOILERPLATE_INDEX,
+    ALIASED_ARGUMENTS_BOILERPLATE_INDEX,
     STRICT_MODE_ARGUMENTS_BOILERPLATE_INDEX,
     JS_ARRAY_MAP_INDEX,
     REGEXP_RESULT_MAP_INDEX,
@@ -268,9 +274,9 @@ class Context: public FixedArray {
   }
   void set_previous(Context* context) { set(PREVIOUS_INDEX, context); }
 
-  bool has_extension() { return unchecked_extension() != NULL; }
-  JSObject* extension() { return JSObject::cast(unchecked_extension()); }
-  void set_extension(JSObject* object) { set(EXTENSION_INDEX, object); }
+  bool has_extension() { return extension() != NULL; }
+  Object* extension() { return get(EXTENSION_INDEX); }
+  void set_extension(Object* object) { set(EXTENSION_INDEX, object); }
 
   GlobalObject* global() {
     Object* result = get(GLOBAL_INDEX);
@@ -289,8 +295,21 @@ class Context: public FixedArray {
   // Compute the global context by traversing the context chain.
   Context* global_context();
 
-  // Tells if this is a function context (as opposed to a 'with' context).
-  bool is_function_context() { return unchecked_previous() == NULL; }
+  // Predicates for context types.  IsGlobalContext is defined on Object
+  // because we frequently have to know if arbitrary objects are global
+  // contexts.
+  bool IsFunctionContext() {
+    Map* map = this->map();
+    return map == map->GetHeap()->function_context_map();
+  }
+  bool IsCatchContext() {
+    Map* map = this->map();
+    return map == map->GetHeap()->catch_context_map();
+  }
+  bool IsWithContext() {
+    Map* map = this->map();
+    return map == map->GetHeap()->with_context_map();
+  }
 
   // Tells whether the global context is marked with out of memory.
   inline bool has_out_of_memory();
@@ -379,7 +398,6 @@ class Context: public FixedArray {
  private:
   // Unchecked access to the slots.
   Object* unchecked_previous() { return get(PREVIOUS_INDEX); }
-  Object* unchecked_extension() { return get(EXTENSION_INDEX); }
 
 #ifdef DEBUG
   // Bootstrapping-aware type checks.

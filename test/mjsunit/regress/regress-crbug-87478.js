@@ -1,4 +1,4 @@
-// Copyright 2008 the V8 project authors. All rights reserved.
+// Copyright 2011 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -25,12 +25,12 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Flags: --allow-natives-syntax
-
-function compare(a, b) {
-  return a === b;
+// Check that arguments access ICs correctly handle non-JSObject
+// receivers.
+function f(array) { return array[0]; }
+function args(a) { return arguments; }
+// Put the keyed load in f into the keyed-load-arguments state.
+for (var i = 0; i < 10; i++) {
+  f(args(1));
 }
-
-compare(1.5, 2.5);
-%OptimizeFunctionOnNextCall(compare);
-assertTrue(compare(undefined, undefined));
+f('123');

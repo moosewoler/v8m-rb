@@ -237,6 +237,8 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
     mtc1(src_high, FPURegister::from_code(dst.code() + 1));
   }
 
+  void Move(FPURegister dst, double imm);
+
   // Jump unconditionally to given label.
   // We NEED a nop in the branch delay slot, as it used by v8, for example in
   // CodeGenerator::ProcessDeferred().
@@ -554,6 +556,10 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   void Ins(Register rt, Register rs, uint16_t pos, uint16_t size);
   void Ext(Register rt, Register rs, uint16_t pos, uint16_t size);
 
+
+  // ---------------------------------------------------------------------------
+  // FPU macros.
+
   // Convert unsigned word to double.
   void Cvt_d_uw(FPURegister fd, FPURegister fs);
   void Cvt_d_uw(FPURegister fd, Register rs);
@@ -561,6 +567,24 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // Convert double to unsigned word.
   void Trunc_uw_d(FPURegister fd, FPURegister fs);
   void Trunc_uw_d(FPURegister fd, Register rs);
+
+  // Wrapper function for the different cmp/branch types.
+  void BranchF(Label* target,
+               Label* nan,
+               Condition cc,
+               FPURegister cmp1,
+               FPURegister cmp2,
+               BranchDelaySlot bd = PROTECT);
+
+  // Alternate (inline) version for better readability with USE_DELAY_SLOT.
+  inline void BranchF(BranchDelaySlot bd,
+                      Label* target,
+                      Label* nan,
+                      Condition cc,
+                      FPURegister cmp1,
+                      FPURegister cmp2) {
+    BranchF(target, nan, cc, cmp1, cmp2, bd);
+  };
 
   // Convert the HeapNumber pointed to by source to a 32bits signed integer
   // dest. If the HeapNumber does not fit into a 32bits signed integer branch
@@ -593,6 +617,7 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                         Register scratch,
                         Register scratch2,
                         Register scratch3);
+
 
   // -------------------------------------------------------------------------
   // Activation frames.
@@ -894,6 +919,9 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
                        int num_arguments,
                        int result_size);
 
+  int CalculateStackPassedWords(int num_reg_arguments,
+                                int num_double_arguments);
+
   // Before calling a C-function from generated code, align arguments on stack
   // and add space for the four mips argument slots.
   // After aligning the frame, non-register arguments must be stored on the
@@ -903,7 +931,11 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // C++ code.
   // Needs a scratch register to do some arithmetic. This register will be
   // trashed.
-  void PrepareCallCFunction(int num_arguments, Register scratch);
+  void PrepareCallCFunction(int num_reg_arguments,
+                            int num_double_registers,
+                            Register scratch);
+  void PrepareCallCFunction(int num_reg_arguments,
+                            Register scratch);
 
   // Arguments 1-4 are placed in registers a0 thru a3 respectively.
   // Arguments 5..n are stored to stack using following:
@@ -916,6 +948,12 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   // function).
   void CallCFunction(ExternalReference function, int num_arguments);
   void CallCFunction(Register function, Register scratch, int num_arguments);
+  void CallCFunction(ExternalReference function,
+                     int num_reg_arguments,
+                     int num_double_arguments);
+  void CallCFunction(Register function, Register scratch,
+                     int num_reg_arguments,
+                     int num_double_arguments);
   void GetCFunctionDoubleResult(const DoubleRegister dst);
 
   // There are two ways of passing double arguments on MIPS, depending on
@@ -1040,10 +1078,11 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
 
   // Jump the register contains a smi.
   inline void JumpIfSmi(Register value, Label* smi_label,
-                        Register scratch = at) {
+                        Register scratch = at,
+                        BranchDelaySlot bd = PROTECT) {
     ASSERT_EQ(0, kSmiTag);
     andi(scratch, value, kSmiTagMask);
-    Branch(smi_label, eq, scratch, Operand(zero_reg));
+    Branch(bd, smi_label, eq, scratch, Operand(zero_reg));
   }
 
   // Jump if the register contains a non-smi.
@@ -1119,7 +1158,28 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   void CallCFunctionHelper(Register function,
                            ExternalReference function_reference,
                            Register scratch,
-                           int num_arguments);
+                           int num_reg_arguments,
+                           int num_double_arguments);
+
+  void BranchShort(int16_t offset, BranchDelaySlot bdslot = PROTECT);
+  void BranchShort(int16_t offset, Condition cond, Register rs,
+                   const Operand& rt,
+                   BranchDelaySlot bdslot = PROTECT);
+  void BranchShort(Label* L, BranchDelaySlot bdslot = PROTECT);
+  void BranchShort(Label* L, Condition cond, Register rs,
+                   const Operand& rt,
+                   BranchDelaySlot bdslot = PROTECT);
+  void BranchAndLinkShort(int16_t offset, BranchDelaySlot bdslot = PROTECT);
+  void BranchAndLinkShort(int16_t offset, Condition cond, Register rs,
+                          const Operand& rt,
+                          BranchDelaySlot bdslot = PROTECT);
+  void BranchAndLinkShort(Label* L, BranchDelaySlot bdslot = PROTECT);
+  void BranchAndLinkShort(Label* L, Condition cond, Register rs,
+                          const Operand& rt,
+                          BranchDelaySlot bdslot = PROTECT);
+  void J(Label* L, BranchDelaySlot bdslot);
+  void Jr(Label* L, BranchDelaySlot bdslot);
+  void Jalr(Label* L, BranchDelaySlot bdslot);
 
   void Jump(intptr_t target, RelocInfo::Mode rmode,
             BranchDelaySlot bd = PROTECT);
@@ -1160,6 +1220,8 @@ DECLARE_NOTARGET_PROTOTYPE(Ret)
   static int SafepointRegisterStackIndex(int reg_code);
   MemOperand SafepointRegisterSlot(Register reg);
   MemOperand SafepointRegistersAndDoublesSlot(Register reg);
+
+  bool UseAbsoluteCodePointers();
 
   bool generating_stub_;
   bool allow_stub_calls_;
@@ -1225,10 +1287,9 @@ static inline MemOperand FieldMemOperand(Register object, int offset) {
 // Generate a MemOperand for storing arguments 5..N on the stack
 // when calling CallCFunction().
 static inline MemOperand CFunctionArgumentOperand(int index) {
-  ASSERT(index > StandardFrameConstants::kCArgSlotCount);
+  ASSERT(index > kCArgSlotCount);
   // Argument 5 takes the slot just past the four Arg-slots.
-  int offset =
-      (index - 5) * kPointerSize + StandardFrameConstants::kCArgsSlotsSize;
+  int offset = (index - 5) * kPointerSize + kCArgsSlotsSize;
   return MemOperand(sp, offset);
 }
 

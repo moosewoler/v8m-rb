@@ -99,6 +99,9 @@ private:
 // Flags for experimental language features.
 DEFINE_bool(harmony_proxies, false, "enable harmony proxies")
 
+// Flags for experimental implementation features.
+DEFINE_bool(unbox_double_arrays, false, "automatically unbox arrays of doubles")
+
 // Flags for Crankshaft.
 DEFINE_bool(crankshaft, true, "use crankshaft")
 DEFINE_string(hydrogen_filter, "", "hydrogen use/trace filter")
@@ -130,8 +133,6 @@ DEFINE_int(deopt_every_n_times,
 DEFINE_bool(trap_on_deopt, false, "put a break point before deoptimizing")
 DEFINE_bool(deoptimize_uncommon_cases, true, "deoptimize uncommon cases")
 DEFINE_bool(polymorphic_inlining, true, "polymorphic inlining")
-DEFINE_bool(aggressive_loop_invariant_motion, true,
-            "aggressive motion of instructions out of loops")
 DEFINE_bool(use_osr, true, "use on-stack replacement")
 
 DEFINE_bool(trace_osr, false, "trace on-stack replacement")
@@ -194,7 +195,6 @@ DEFINE_bool(opt, true, "use adaptive optimizations")
 DEFINE_bool(opt_eagerly, false, "be more eager when adaptively optimizing")
 DEFINE_bool(always_opt, false, "always try to optimize functions")
 DEFINE_bool(prepare_always_opt, false, "prepare for turning on always opt")
-DEFINE_bool(debug_info, true, "add debug information to compiled functions")
 DEFINE_bool(deopt, true, "support deoptimization")
 DEFINE_bool(trace_deopt, false, "trace deoptimization")
 
@@ -470,7 +470,6 @@ DEFINE_bool(log_handles, false, "Log global handle events.")
 DEFINE_bool(log_snapshot_positions, false,
             "log positions of (de)serialized objects in the snapshot.")
 DEFINE_bool(log_suspect, false, "Log suspect operations.")
-DEFINE_bool(log_producers, false, "Log stack traces of JS objects allocations.")
 DEFINE_bool(prof, false,
             "Log statistical profiling information (implies --log-code).")
 DEFINE_bool(prof_auto, true,

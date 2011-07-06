@@ -190,8 +190,8 @@ class PreallocatedMemoryThread: public Thread {
 
 
  private:
-  explicit PreallocatedMemoryThread(Isolate* isolate)
-      : Thread(isolate, "v8:PreallocMem"),
+  PreallocatedMemoryThread()
+      : Thread("v8:PreallocMem"),
         keep_running_(true),
         wait_for_ever_semaphore_(OS::CreateSemaphore(0)),
         data_ready_semaphore_(OS::CreateSemaphore(0)),
@@ -219,7 +219,7 @@ class PreallocatedMemoryThread: public Thread {
 
 void Isolate::PreallocatedMemoryThreadStart() {
   if (preallocated_memory_thread_ != NULL) return;
-  preallocated_memory_thread_ = new PreallocatedMemoryThread(this);
+  preallocated_memory_thread_ = new PreallocatedMemoryThread();
   preallocated_memory_thread_->Start();
 }
 
@@ -1445,10 +1445,6 @@ Isolate::Isolate()
   debugger_ = NULL;
 #endif
 
-#ifdef ENABLE_LOGGING_AND_PROFILING
-  producer_heap_profile_ = NULL;
-#endif
-
   handle_scope_data_.Initialize();
 
 #define ISOLATE_INIT_EXECUTE(type, name, initial_value)                        \
@@ -1537,11 +1533,6 @@ void Isolate::SetIsolateThreadLocals(Isolate* isolate,
 Isolate::~Isolate() {
   TRACE_ISOLATE(destructor);
 
-#ifdef ENABLE_LOGGING_AND_PROFILING
-  delete producer_heap_profile_;
-  producer_heap_profile_ = NULL;
-#endif
-
   delete unicode_cache_;
   unicode_cache_ = NULL;
 
@@ -1617,8 +1608,7 @@ bool Isolate::PreInit() {
   ASSERT(Isolate::Current() == this);
 #ifdef ENABLE_DEBUGGER_SUPPORT
   debug_ = new Debug(this);
-  debugger_ = new Debugger();
-  debugger_->isolate_ = this;
+  debugger_ = new Debugger(this);
 #endif
 
   memory_allocator_ = new MemoryAllocator();
@@ -1657,11 +1647,6 @@ bool Isolate::PreInit() {
   ast_sentinels_ = new AstSentinels();
   regexp_stack_ = new RegExpStack();
   regexp_stack_->isolate_ = this;
-
-#ifdef ENABLE_LOGGING_AND_PROFILING
-  producer_heap_profile_ = new ProducerHeapProfile();
-  producer_heap_profile_->isolate_ = this;
-#endif
 
   state_ = PREINITIALIZED;
   return true;

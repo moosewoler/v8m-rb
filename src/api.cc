@@ -884,6 +884,7 @@ static void InitializeFunctionTemplate(
       i::Handle<i::FunctionTemplateInfo> info) {
   info->set_tag(i::Smi::FromInt(Consts::FUNCTION_TEMPLATE));
   info->set_flag(0);
+  info->set_prototype_attributes(i::Smi::FromInt(v8::None));
 }
 
 
@@ -1103,6 +1104,17 @@ void FunctionTemplate::SetHiddenPrototype(bool value) {
   }
   ENTER_V8(isolate);
   Utils::OpenHandle(this)->set_hidden_prototype(value);
+}
+
+
+void FunctionTemplate::SetPrototypeAttributes(int attributes) {
+  i::Isolate* isolate = Utils::OpenHandle(this)->GetIsolate();
+  if (IsDeadCheck(isolate, "v8::FunctionTemplate::SetPrototypeAttributes()")) {
+    return;
+  }
+  ENTER_V8(isolate);
+  Utils::OpenHandle(this)->set_prototype_attributes(
+      i::Smi::FromInt(attributes));
 }
 
 
@@ -2753,6 +2765,25 @@ Local<Array> v8::Object::GetPropertyNames() {
   i::Handle<i::JSObject> self = Utils::OpenHandle(this);
   i::Handle<i::FixedArray> value =
       i::GetKeysInFixedArrayFor(self, i::INCLUDE_PROTOS);
+  // Because we use caching to speed up enumeration it is important
+  // to never change the result of the basic enumeration function so
+  // we clone the result.
+  i::Handle<i::FixedArray> elms = isolate->factory()->CopyFixedArray(value);
+  i::Handle<i::JSArray> result =
+      isolate->factory()->NewJSArrayWithElements(elms);
+  return Utils::ToLocal(scope.CloseAndEscape(result));
+}
+
+
+Local<Array> v8::Object::GetOwnPropertyNames() {
+  i::Isolate* isolate = Utils::OpenHandle(this)->GetIsolate();
+  ON_BAILOUT(isolate, "v8::Object::GetOwnPropertyNames()",
+             return Local<v8::Array>());
+  ENTER_V8(isolate);
+  i::HandleScope scope(isolate);
+  i::Handle<i::JSObject> self = Utils::OpenHandle(this);
+  i::Handle<i::FixedArray> value =
+      i::GetKeysInFixedArrayFor(self, i::LOCAL_ONLY);
   // Because we use caching to speed up enumeration it is important
   // to never change the result of the basic enumeration function so
   // we clone the result.
@@ -4824,22 +4855,7 @@ bool V8::IsProfilerPaused() {
 void V8::ResumeProfilerEx(int flags, int tag) {
 #ifdef ENABLE_LOGGING_AND_PROFILING
   i::Isolate* isolate = i::Isolate::Current();
-  if (flags & PROFILER_MODULE_HEAP_SNAPSHOT) {
-    // Snapshot mode: resume modules, perform GC, then pause only
-    // those modules which haven't been started prior to making a
-    // snapshot.
-
-    // Make a GC prior to taking a snapshot.
-    isolate->heap()->CollectAllGarbage(false);
-    // Reset snapshot flag and CPU module flags.
-    flags &= ~(PROFILER_MODULE_HEAP_SNAPSHOT | PROFILER_MODULE_CPU);
-    const int current_flags = isolate->logger()->GetActiveProfilerModules();
-    isolate->logger()->ResumeProfiler(flags, tag);
-    isolate->heap()->CollectAllGarbage(false);
-    isolate->logger()->PauseProfiler(~current_flags & flags, tag);
-  } else {
-    isolate->logger()->ResumeProfiler(flags, tag);
-  }
+  isolate->logger()->ResumeProfiler(flags, tag);
 #endif
 }
 
@@ -4902,9 +4918,10 @@ void V8::TerminateExecution(Isolate* isolate) {
 }
 
 
-bool V8::IsExecutionTerminating() {
-  i::Isolate* isolate = i::Isolate::Current();
-  return IsExecutionTerminatingCheck(isolate);
+bool V8::IsExecutionTerminating(Isolate* isolate) {
+  i::Isolate* i_isolate = isolate != NULL ?
+      reinterpret_cast<i::Isolate*>(isolate) : i::Isolate::Current();
+  return IsExecutionTerminatingCheck(i_isolate);
 }
 
 
@@ -5688,20 +5705,7 @@ uint64_t HeapGraphNode::GetId() const {
 #ifdef ENABLE_LOGGING_AND_PROFILING
   i::Isolate* isolate = i::Isolate::Current();
   IsDeadCheck(isolate, "v8::HeapGraphNode::GetId");
-  ASSERT(ToInternal(this)->snapshot()->type() != i::HeapSnapshot::kAggregated);
   return ToInternal(this)->id();
-#else
-  return 0;
-#endif
-}
-
-
-int HeapGraphNode::GetInstancesCount() const {
-#ifdef ENABLE_LOGGING_AND_PROFILING
-  i::Isolate* isolate = i::Isolate::Current();
-  IsDeadCheck(isolate, "v8::HeapGraphNode::GetInstancesCount");
-  ASSERT(ToInternal(this)->snapshot()->type() == i::HeapSnapshot::kAggregated);
-  return static_cast<int>(ToInternal(this)->id());
 #else
   return 0;
 #endif
@@ -5866,6 +5870,29 @@ const HeapGraphNode* HeapSnapshot::GetNodeById(uint64_t id) const {
 }
 
 
+int HeapSnapshot::GetNodesCount() const {
+#ifdef ENABLE_LOGGING_AND_PROFILING
+  i::Isolate* isolate = i::Isolate::Current();
+  IsDeadCheck(isolate, "v8::HeapSnapshot::GetNodesCount");
+  return ToInternal(this)->entries()->length();
+#else
+  return 0;
+#endif
+}
+
+
+const HeapGraphNode* HeapSnapshot::GetNode(int index) const {
+#ifdef ENABLE_LOGGING_AND_PROFILING
+  i::Isolate* isolate = i::Isolate::Current();
+  IsDeadCheck(isolate, "v8::HeapSnapshot::GetNode");
+  return reinterpret_cast<const HeapGraphNode*>(
+      ToInternal(this)->entries()->at(index));
+#else
+  return 0;
+#endif
+}
+
+
 void HeapSnapshot::Serialize(OutputStream* stream,
                              HeapSnapshot::SerializationFormat format) const {
 #ifdef ENABLE_LOGGING_AND_PROFILING
@@ -5931,9 +5958,6 @@ const HeapSnapshot* HeapProfiler::TakeSnapshot(Handle<String> title,
   switch (type) {
     case HeapSnapshot::kFull:
       internal_type = i::HeapSnapshot::kFull;
-      break;
-    case HeapSnapshot::kAggregated:
-      internal_type = i::HeapSnapshot::kAggregated;
       break;
     default:
       UNREACHABLE();

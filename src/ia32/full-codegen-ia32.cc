@@ -175,7 +175,7 @@ void FullCodeGenerator::Generate(CompilationInfo* info) {
       FastNewContextStub stub(heap_slots);
       __ CallStub(&stub);
     } else {
-      __ CallRuntime(Runtime::kNewContext, 1);
+      __ CallRuntime(Runtime::kNewFunctionContext, 1);
     }
     function_in_register = false;
     // Context is returned in both eax and esi.  It replaces the context
@@ -218,20 +218,21 @@ void FullCodeGenerator::Generate(CompilationInfo* info) {
            Operand(ebp, StandardFrameConstants::kCallerSPOffset + offset));
     __ push(edx);
     __ SafePush(Immediate(Smi::FromInt(scope()->num_parameters())));
-    // Arguments to ArgumentsAccessStub:
+    // Arguments to ArgumentsAccessStub and/or New...:
     //   function, receiver address, parameter count.
     // The stub will rewrite receiver and parameter count if the previous
     // stack frame was an arguments adapter frame.
-    ArgumentsAccessStub stub(
-        is_strict_mode() ? ArgumentsAccessStub::NEW_STRICT
-                         : ArgumentsAccessStub::NEW_NON_STRICT);
+    ArgumentsAccessStub::Type type;
+    if (is_strict_mode()) {
+      type = ArgumentsAccessStub::NEW_STRICT;
+    } else if (function()->has_duplicate_parameters()) {
+      type = ArgumentsAccessStub::NEW_NON_STRICT_SLOW;
+    } else {
+      type = ArgumentsAccessStub::NEW_NON_STRICT_FAST;
+    }
+    ArgumentsAccessStub stub(type);
     __ CallStub(&stub);
 
-    Variable* arguments_shadow = scope()->arguments_shadow();
-    if (arguments_shadow != NULL) {
-      __ mov(ecx, eax);  // Duplicate result.
-      Move(arguments_shadow->AsSlot(), ecx, ebx, edx);
-    }
     Move(arguments->AsSlot(), eax, ebx, edx);
   }
 
@@ -374,7 +375,7 @@ void FullCodeGenerator::TestContext::Plug(Slot* slot) const {
   // For simplicity we always test the accumulator register.
   codegen()->Move(result_register(), slot);
   codegen()->PrepareForBailoutBeforeSplit(TOS_REG, false, NULL, NULL);
-  codegen()->DoTest(true_label_, false_label_, fall_through_);
+  codegen()->DoTest(this);
 }
 
 
@@ -448,7 +449,7 @@ void FullCodeGenerator::TestContext::Plug(Handle<Object> lit) const {
   } else {
     // For simplicity we always test the accumulator register.
     __ mov(result_register(), lit);
-    codegen()->DoTest(true_label_, false_label_, fall_through_);
+    codegen()->DoTest(this);
   }
 }
 
@@ -484,7 +485,7 @@ void FullCodeGenerator::TestContext::DropAndPlug(int count,
   __ Drop(count);
   __ Move(result_register(), reg);
   codegen()->PrepareForBailoutBeforeSplit(TOS_REG, false, NULL, NULL);
-  codegen()->DoTest(true_label_, false_label_, fall_through_);
+  codegen()->DoTest(this);
 }
 
 
@@ -561,13 +562,14 @@ void FullCodeGenerator::TestContext::Plug(bool flag) const {
 }
 
 
-void FullCodeGenerator::DoTest(Label* if_true,
+void FullCodeGenerator::DoTest(Expression* condition,
+                               Label* if_true,
                                Label* if_false,
                                Label* fall_through) {
-  ToBooleanStub stub;
+  ToBooleanStub stub(result_register());
   __ push(result_register());
   __ CallStub(&stub);
-  __ test(eax, Operand(eax));
+  __ test(result_register(), Operand(result_register()));
   // The stub returns nonzero for true.
   Split(not_zero, if_true, if_false, fall_through);
 }
@@ -873,8 +875,7 @@ void FullCodeGenerator::VisitForInStatement(ForInStatement* stmt) {
 
   // Convert the object to a JS object.
   Label convert, done_convert;
-  __ test(eax, Immediate(kSmiTagMask));
-  __ j(zero, &convert, Label::kNear);
+  __ JumpIfSmi(eax, &convert, Label::kNear);
   __ CmpObjectType(eax, FIRST_SPEC_OBJECT_TYPE, ecx);
   __ j(above_equal, &done_convert, Label::kNear);
   __ bind(&convert);
@@ -908,8 +909,7 @@ void FullCodeGenerator::VisitForInStatement(ForInStatement* stmt) {
   // descriptors (edx).  This is the case if the next enumeration
   // index field does not contain a smi.
   __ mov(edx, FieldOperand(edx, DescriptorArray::kEnumerationIndexOffset));
-  __ test(edx, Immediate(kSmiTagMask));
-  __ j(zero, &call_runtime);
+  __ JumpIfSmi(edx, &call_runtime);
 
   // For all objects but the receiver, check that the cache is empty.
   Label check_prototype;
@@ -1078,8 +1078,7 @@ void FullCodeGenerator::EmitLoadGlobalSlotCheckExtensions(
         __ j(not_equal, slow);
       }
       // Load next context in chain.
-      __ mov(temp, ContextOperand(context, Context::CLOSURE_INDEX));
-      __ mov(temp, FieldOperand(temp, JSFunction::kContextOffset));
+      __ mov(temp, ContextOperand(context, Context::PREVIOUS_INDEX));
       // Walk the rest of the chain without clobbering esi.
       context = temp;
     }
@@ -1106,8 +1105,7 @@ void FullCodeGenerator::EmitLoadGlobalSlotCheckExtensions(
     __ cmp(ContextOperand(temp, Context::EXTENSION_INDEX), Immediate(0));
     __ j(not_equal, slow);
     // Load next context in chain.
-    __ mov(temp, ContextOperand(temp, Context::CLOSURE_INDEX));
-    __ mov(temp, FieldOperand(temp, JSFunction::kContextOffset));
+    __ mov(temp, ContextOperand(temp, Context::PREVIOUS_INDEX));
     __ jmp(&next);
     __ bind(&fast);
   }
@@ -1139,8 +1137,7 @@ MemOperand FullCodeGenerator::ContextSlotOperandCheckExtensions(
                Immediate(0));
         __ j(not_equal, slow);
       }
-      __ mov(temp, ContextOperand(context, Context::CLOSURE_INDEX));
-      __ mov(temp, FieldOperand(temp, JSFunction::kContextOffset));
+      __ mov(temp, ContextOperand(context, Context::PREVIOUS_INDEX));
       // Walk the rest of the chain without clobbering esi.
       context = temp;
     }
@@ -1211,13 +1208,12 @@ void FullCodeGenerator::EmitDynamicLoadFromSlotFastCase(
 
 
 void FullCodeGenerator::EmitVariableLoad(Variable* var) {
-  // Four cases: non-this global variables, lookup slots, all other
-  // types of slots, and parameters that rewrite to explicit property
-  // accesses on the arguments object.
+  // Three cases: non-this global variables, lookup slots, and all other
+  // types of slots.
   Slot* slot = var->AsSlot();
-  Property* property = var->AsProperty();
+  ASSERT((var->is_global() && !var->is_this()) == (slot == NULL));
 
-  if (var->is_global() && !var->is_this()) {
+  if (slot == NULL) {
     Comment cmnt(masm_, "Global variable");
     // Use inline caching. Variable name is passed in ecx and the global
     // object on the stack.
@@ -1227,7 +1223,7 @@ void FullCodeGenerator::EmitVariableLoad(Variable* var) {
     EmitCallIC(ic, RelocInfo::CODE_TARGET_CONTEXT, AstNode::kNoNumber);
     context()->Plug(eax);
 
-  } else if (slot != NULL && slot->type() == Slot::LOOKUP) {
+  } else if (slot->type() == Slot::LOOKUP) {
     Label done, slow;
 
     // Generate code for loading from variables potentially shadowed
@@ -1243,7 +1239,7 @@ void FullCodeGenerator::EmitVariableLoad(Variable* var) {
 
     context()->Plug(eax);
 
-  } else if (slot != NULL) {
+  } else {
     Comment cmnt(masm_, (slot->type() == Slot::CONTEXT)
                             ? "Context slot"
                             : "Stack slot");
@@ -1261,36 +1257,6 @@ void FullCodeGenerator::EmitVariableLoad(Variable* var) {
     } else {
       context()->Plug(slot);
     }
-
-  } else {
-    Comment cmnt(masm_, "Rewritten parameter");
-    ASSERT_NOT_NULL(property);
-    // Rewritten parameter accesses are of the form "slot[literal]".
-
-    // Assert that the object is in a slot.
-    Variable* object_var = property->obj()->AsVariableProxy()->AsVariable();
-    ASSERT_NOT_NULL(object_var);
-    Slot* object_slot = object_var->AsSlot();
-    ASSERT_NOT_NULL(object_slot);
-
-    // Load the object.
-    MemOperand object_loc = EmitSlotSearch(object_slot, eax);
-    __ mov(edx, object_loc);
-
-    // Assert that the key is a smi.
-    Literal* key_literal = property->key()->AsLiteral();
-    ASSERT_NOT_NULL(key_literal);
-    ASSERT(key_literal->handle()->IsSmi());
-
-    // Load the key.
-    __ SafeSet(eax, Immediate(key_literal->handle()));
-
-    // Do a keyed property load.
-    Handle<Code> ic = isolate()->builtins()->KeyedLoadIC_Initialize();
-    EmitCallIC(ic, RelocInfo::CODE_TARGET, GetPropertyId(property));
-
-    // Drop key and object left on the stack by IC.
-    context()->Plug(eax);
   }
 }
 
@@ -1523,7 +1489,7 @@ void FullCodeGenerator::VisitAssignment(Assignment* expr) {
   }
 
   // Left-hand side can only be a property, a global or a (parameter or local)
-  // slot. Variables with rewrite to .arguments are treated as KEYED_PROPERTY.
+  // slot.
   enum LhsKind { VARIABLE, NAMED_PROPERTY, KEYED_PROPERTY };
   LhsKind assign_type = VARIABLE;
   Property* property = expr->target()->AsProperty();
@@ -1549,29 +1515,13 @@ void FullCodeGenerator::VisitAssignment(Assignment* expr) {
       break;
     case KEYED_PROPERTY: {
       if (expr->is_compound()) {
-        if (property->is_arguments_access()) {
-          VariableProxy* obj_proxy = property->obj()->AsVariableProxy();
-          MemOperand slot_operand =
-              EmitSlotSearch(obj_proxy->var()->AsSlot(), ecx);
-          __ push(slot_operand);
-          __ SafeSet(eax, Immediate(property->key()->AsLiteral()->handle()));
-        } else {
-          VisitForStackValue(property->obj());
-          VisitForAccumulatorValue(property->key());
-        }
+        VisitForStackValue(property->obj());
+        VisitForAccumulatorValue(property->key());
         __ mov(edx, Operand(esp, 0));
         __ push(eax);
       } else {
-        if (property->is_arguments_access()) {
-          VariableProxy* obj_proxy = property->obj()->AsVariableProxy();
-          MemOperand slot_operand =
-              EmitSlotSearch(obj_proxy->var()->AsSlot(), ecx);
-          __ push(slot_operand);
-          __ SafePush(Immediate(property->key()->AsLiteral()->handle()));
-        } else {
-          VisitForStackValue(property->obj());
-          VisitForStackValue(property->key());
-        }
+        VisitForStackValue(property->obj());
+        VisitForStackValue(property->key());
       }
       break;
     }
@@ -1775,7 +1725,7 @@ void FullCodeGenerator::EmitAssignment(Expression* expr, int bailout_ast_id) {
   }
 
   // Left-hand side can only be a property, a global or a (parameter or local)
-  // slot. Variables with rewrite to .arguments are treated as KEYED_PROPERTY.
+  // slot.
   enum LhsKind { VARIABLE, NAMED_PROPERTY, KEYED_PROPERTY };
   LhsKind assign_type = VARIABLE;
   Property* prop = expr->AsProperty();
@@ -1835,8 +1785,6 @@ void FullCodeGenerator::EmitAssignment(Expression* expr, int bailout_ast_id) {
 
 void FullCodeGenerator::EmitVariableAssignment(Variable* var,
                                                Token::Value op) {
-  // Left-hand sides that rewrite to explicit property accesses do not reach
-  // here.
   ASSERT(var != NULL);
   ASSERT(var->is_global() || var->AsSlot() != NULL);
 
@@ -2388,8 +2336,7 @@ void FullCodeGenerator::EmitIsObject(ZoneList<Expression*>* args) {
   context()->PrepareTest(&materialize_true, &materialize_false,
                          &if_true, &if_false, &fall_through);
 
-  __ test(eax, Immediate(kSmiTagMask));
-  __ j(zero, if_false);
+  __ JumpIfSmi(eax, if_false);
   __ cmp(eax, isolate()->factory()->null_value());
   __ j(equal, if_true);
   __ mov(ebx, FieldOperand(eax, HeapObject::kMapOffset));
@@ -2420,8 +2367,7 @@ void FullCodeGenerator::EmitIsSpecObject(ZoneList<Expression*>* args) {
   context()->PrepareTest(&materialize_true, &materialize_false,
                          &if_true, &if_false, &fall_through);
 
-  __ test(eax, Immediate(kSmiTagMask));
-  __ j(equal, if_false);
+  __ JumpIfSmi(eax, if_false);
   __ CmpObjectType(eax, FIRST_SPEC_OBJECT_TYPE, ebx);
   PrepareForBailoutBeforeSplit(TOS_REG, true, if_true, if_false);
   Split(above_equal, if_true, if_false, fall_through);
@@ -2442,8 +2388,7 @@ void FullCodeGenerator::EmitIsUndetectableObject(ZoneList<Expression*>* args) {
   context()->PrepareTest(&materialize_true, &materialize_false,
                          &if_true, &if_false, &fall_through);
 
-  __ test(eax, Immediate(kSmiTagMask));
-  __ j(zero, if_false);
+  __ JumpIfSmi(eax, if_false);
   __ mov(ebx, FieldOperand(eax, HeapObject::kMapOffset));
   __ movzx_b(ebx, FieldOperand(ebx, Map::kBitFieldOffset));
   __ test(ebx, Immediate(1 << Map::kIsUndetectable));
@@ -2517,8 +2462,7 @@ void FullCodeGenerator::EmitIsStringWrapperSafeForDefaultValueOf(
   // If a valueOf property is not found on the object check that it's
   // prototype is the un-modified String prototype. If not result is false.
   __ mov(ecx, FieldOperand(ebx, Map::kPrototypeOffset));
-  __ test(ecx, Immediate(kSmiTagMask));
-  __ j(zero, if_false);
+  __ JumpIfSmi(ecx, if_false);
   __ mov(ecx, FieldOperand(ecx, HeapObject::kMapOffset));
   __ mov(edx, Operand(esi, Context::SlotOffset(Context::GLOBAL_INDEX)));
   __ mov(edx,
@@ -2550,8 +2494,7 @@ void FullCodeGenerator::EmitIsFunction(ZoneList<Expression*>* args) {
   context()->PrepareTest(&materialize_true, &materialize_false,
                          &if_true, &if_false, &fall_through);
 
-  __ test(eax, Immediate(kSmiTagMask));
-  __ j(zero, if_false);
+  __ JumpIfSmi(eax, if_false);
   __ CmpObjectType(eax, JS_FUNCTION_TYPE, ebx);
   PrepareForBailoutBeforeSplit(TOS_REG, true, if_true, if_false);
   Split(equal, if_true, if_false, fall_through);
@@ -2572,8 +2515,7 @@ void FullCodeGenerator::EmitIsArray(ZoneList<Expression*>* args) {
   context()->PrepareTest(&materialize_true, &materialize_false,
                          &if_true, &if_false, &fall_through);
 
-  __ test(eax, Immediate(kSmiTagMask));
-  __ j(equal, if_false);
+  __ JumpIfSmi(eax, if_false);
   __ CmpObjectType(eax, JS_ARRAY_TYPE, ebx);
   PrepareForBailoutBeforeSplit(TOS_REG, true, if_true, if_false);
   Split(equal, if_true, if_false, fall_through);
@@ -2594,8 +2536,7 @@ void FullCodeGenerator::EmitIsRegExp(ZoneList<Expression*>* args) {
   context()->PrepareTest(&materialize_true, &materialize_false,
                          &if_true, &if_false, &fall_through);
 
-  __ test(eax, Immediate(kSmiTagMask));
-  __ j(equal, if_false);
+  __ JumpIfSmi(eax, if_false);
   __ CmpObjectType(eax, JS_REGEXP_TYPE, ebx);
   PrepareForBailoutBeforeSplit(TOS_REG, true, if_true, if_false);
   Split(equal, if_true, if_false, fall_through);
@@ -2703,8 +2644,7 @@ void FullCodeGenerator::EmitClassOf(ZoneList<Expression*>* args) {
   VisitForAccumulatorValue(args->at(0));
 
   // If the object is a smi, we return null.
-  __ test(eax, Immediate(kSmiTagMask));
-  __ j(zero, &null);
+  __ JumpIfSmi(eax, &null);
 
   // Check that the object is a JS object but take special care of JS
   // functions to make sure they have 'Function' as their class.
@@ -2857,8 +2797,7 @@ void FullCodeGenerator::EmitValueOf(ZoneList<Expression*>* args) {
 
   Label done;
   // If the object is a smi return the object.
-  __ test(eax, Immediate(kSmiTagMask));
-  __ j(zero, &done, Label::kNear);
+  __ JumpIfSmi(eax, &done, Label::kNear);
   // If the object is not a value type, return the object.
   __ CmpObjectType(eax, JS_VALUE_TYPE, ebx);
   __ j(not_equal, &done, Label::kNear);
@@ -2894,8 +2833,7 @@ void FullCodeGenerator::EmitSetValueOf(ZoneList<Expression*>* args) {
 
   Label done;
   // If the object is a smi, return the value.
-  __ test(ebx, Immediate(kSmiTagMask));
-  __ j(zero, &done, Label::kNear);
+  __ JumpIfSmi(ebx, &done, Label::kNear);
 
   // If the object is not a value type, return the value.
   __ CmpObjectType(ebx, JS_VALUE_TYPE, ecx);
@@ -3169,8 +3107,7 @@ void FullCodeGenerator::EmitSwapElements(ZoneList<Expression*>* args) {
   __ mov(index_2, Operand(esp, 0));
   __ mov(temp, index_1);
   __ or_(temp, Operand(index_2));
-  __ test(temp, Immediate(kSmiTagMask));
-  __ j(not_zero, &slow_case);
+  __ JumpIfNotSmi(temp, &slow_case);
 
   // Check that both indices are valid.
   __ mov(temp, FieldOperand(object, JSArray::kLengthOffset));
@@ -3275,8 +3212,7 @@ void FullCodeGenerator::EmitIsRegExpEquivalent(ZoneList<Expression*>* args) {
   // Fail if either is a non-HeapObject.
   __ mov(tmp, left);
   __ and_(Operand(tmp), right);
-  __ test(Operand(tmp), Immediate(kSmiTagMask));
-  __ j(zero, &fail);
+  __ JumpIfSmi(tmp, &fail);
   __ mov(tmp, FieldOperand(left, HeapObject::kMapOffset));
   __ CmpInstanceType(tmp, JS_REGEXP_TYPE);
   __ j(not_equal, &fail);
@@ -3368,8 +3304,7 @@ void FullCodeGenerator::EmitFastAsciiArrayJoin(ZoneList<Expression*>* args) {
   __ sub(Operand(esp), Immediate(2 * kPointerSize));
   __ cld();
   // Check that the array is a JSArray
-  __ test(array, Immediate(kSmiTagMask));
-  __ j(zero, &bailout);
+  __ JumpIfSmi(array, &bailout);
   __ CmpObjectType(array, JS_ARRAY_TYPE, scratch);
   __ j(not_equal, &bailout);
 
@@ -3410,8 +3345,7 @@ void FullCodeGenerator::EmitFastAsciiArrayJoin(ZoneList<Expression*>* args) {
                               index,
                               times_pointer_size,
                               FixedArray::kHeaderSize));
-  __ test(string, Immediate(kSmiTagMask));
-  __ j(zero, &bailout);
+  __ JumpIfSmi(string, &bailout);
   __ mov(scratch, FieldOperand(string, HeapObject::kMapOffset));
   __ movzx_b(scratch, FieldOperand(scratch, Map::kInstanceTypeOffset));
   __ and_(scratch, Immediate(
@@ -3444,8 +3378,7 @@ void FullCodeGenerator::EmitFastAsciiArrayJoin(ZoneList<Expression*>* args) {
 
   // Check that the separator is a flat ASCII string.
   __ mov(string, separator_operand);
-  __ test(string, Immediate(kSmiTagMask));
-  __ j(zero, &bailout);
+  __ JumpIfSmi(string, &bailout);
   __ mov(scratch, FieldOperand(string, HeapObject::kMapOffset));
   __ movzx_b(scratch, FieldOperand(scratch, Map::kInstanceTypeOffset));
   __ and_(scratch, Immediate(
@@ -3737,8 +3670,7 @@ void FullCodeGenerator::VisitUnaryOperation(UnaryOperation* expr) {
       Comment cmt(masm_, "[ UnaryOperation (ADD)");
       VisitForAccumulatorValue(expr->expression());
       Label no_conversion;
-      __ test(result_register(), Immediate(kSmiTagMask));
-      __ j(zero, &no_conversion);
+      __ JumpIfSmi(result_register(), &no_conversion);
       ToNumberStub convert_stub;
       __ CallStub(&convert_stub);
       __ bind(&no_conversion);
@@ -3789,7 +3721,7 @@ void FullCodeGenerator::VisitCountOperation(CountOperation* expr) {
   }
 
   // Expression can only be a property, a global or a (parameter or local)
-  // slot. Variables with rewrite to .arguments are treated as KEYED_PROPERTY.
+  // slot.
   enum LhsKind { VARIABLE, NAMED_PROPERTY, KEYED_PROPERTY };
   LhsKind assign_type = VARIABLE;
   Property* prop = expr->expression()->AsProperty();
@@ -3816,16 +3748,8 @@ void FullCodeGenerator::VisitCountOperation(CountOperation* expr) {
       __ push(eax);
       EmitNamedPropertyLoad(prop);
     } else {
-      if (prop->is_arguments_access()) {
-        VariableProxy* obj_proxy = prop->obj()->AsVariableProxy();
-        MemOperand slot_operand =
-            EmitSlotSearch(obj_proxy->var()->AsSlot(), ecx);
-        __ push(slot_operand);
-        __ SafeSet(eax, Immediate(prop->key()->AsLiteral()->handle()));
-      } else {
-        VisitForStackValue(prop->obj());
-        VisitForAccumulatorValue(prop->key());
-      }
+      VisitForStackValue(prop->obj());
+      VisitForAccumulatorValue(prop->key());
       __ mov(edx, Operand(esp, 0));
       __ push(eax);
       EmitKeyedPropertyLoad(prop);
@@ -3843,8 +3767,7 @@ void FullCodeGenerator::VisitCountOperation(CountOperation* expr) {
   // Call ToNumber only if operand is not a smi.
   Label no_conversion;
   if (ShouldInlineSmiCase(expr->op())) {
-    __ test(eax, Immediate(kSmiTagMask));
-    __ j(zero, &no_conversion, Label::kNear);
+    __ JumpIfSmi(eax, &no_conversion, Label::kNear);
   }
   ToNumberStub convert_stub;
   __ CallStub(&convert_stub);
@@ -4007,25 +3930,13 @@ void FullCodeGenerator::VisitForTypeofValue(Expression* expr) {
 }
 
 
-bool FullCodeGenerator::TryLiteralCompare(Token::Value op,
-                                          Expression* left,
-                                          Expression* right,
-                                          Label* if_true,
-                                          Label* if_false,
-                                          Label* fall_through) {
-  if (op != Token::EQ && op != Token::EQ_STRICT) return false;
-
-  // Check for the pattern: typeof <expression> == <string literal>.
-  Literal* right_literal = right->AsLiteral();
-  if (right_literal == NULL) return false;
-  Handle<Object> right_literal_value = right_literal->handle();
-  if (!right_literal_value->IsString()) return false;
-  UnaryOperation* left_unary = left->AsUnaryOperation();
-  if (left_unary == NULL || left_unary->op() != Token::TYPEOF) return false;
-  Handle<String> check = Handle<String>::cast(right_literal_value);
-
+void FullCodeGenerator::EmitLiteralCompareTypeof(Expression* expr,
+                                                 Handle<String> check,
+                                                 Label* if_true,
+                                                 Label* if_false,
+                                                 Label* fall_through) {
   { AccumulatorValueContext context(this);
-    VisitForTypeofValue(left_unary->expression());
+    VisitForTypeofValue(expr);
   }
   PrepareForBailoutBeforeSplit(TOS_REG, true, if_true, if_false);
 
@@ -4075,8 +3986,18 @@ bool FullCodeGenerator::TryLiteralCompare(Token::Value op,
   } else {
     if (if_false != fall_through) __ jmp(if_false);
   }
+}
 
-  return true;
+
+void FullCodeGenerator::EmitLiteralCompareUndefined(Expression* expr,
+                                                    Label* if_true,
+                                                    Label* if_false,
+                                                    Label* fall_through) {
+  VisitForAccumulatorValue(expr);
+  PrepareForBailoutBeforeSplit(TOS_REG, true, if_true, if_false);
+
+  __ cmp(eax, isolate()->factory()->undefined_value());
+  Split(equal, if_true, if_false, fall_through);
 }
 
 
@@ -4096,14 +4017,12 @@ void FullCodeGenerator::VisitCompareOperation(CompareOperation* expr) {
 
   // First we try a fast inlined version of the compare when one of
   // the operands is a literal.
-  Token::Value op = expr->op();
-  Expression* left = expr->left();
-  Expression* right = expr->right();
-  if (TryLiteralCompare(op, left, right, if_true, if_false, fall_through)) {
+  if (TryLiteralCompare(expr, if_true, if_false, fall_through)) {
     context()->Plug(if_true, if_false);
     return;
   }
 
+  Token::Value op = expr->op();
   VisitForStackValue(expr->left());
   switch (expr->op()) {
     case Token::IN:
@@ -4210,8 +4129,7 @@ void FullCodeGenerator::VisitCompareToNull(CompareToNull* expr) {
     __ j(equal, if_true);
     __ cmp(eax, isolate()->factory()->undefined_value());
     __ j(equal, if_true);
-    __ test(eax, Immediate(kSmiTagMask));
-    __ j(zero, if_false);
+    __ JumpIfSmi(eax, if_false);
     // It can be an undetectable object.
     __ mov(edx, FieldOperand(eax, HeapObject::kMapOffset));
     __ movzx_b(edx, FieldOperand(edx, Map::kBitFieldOffset));

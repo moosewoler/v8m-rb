@@ -1465,6 +1465,13 @@ class Object : public Value {
   V8EXPORT Local<Array> GetPropertyNames();
 
   /**
+   * This function has the same functionality as GetPropertyNames but
+   * the returned array doesn't contain the names of properties from
+   * prototype objects.
+   */
+  V8EXPORT Local<Array> GetOwnPropertyNames();
+
+  /**
    * Get the prototype object.  This does not skip objects marked to
    * be skipped by __proto__ and it does not consult the security
    * handler.
@@ -2137,6 +2144,13 @@ class V8EXPORT FunctionTemplate : public Template {
   void SetHiddenPrototype(bool value);
 
   /**
+   * Sets the property attributes of the 'prototype' property of functions
+   * created from this FunctionTemplate. Can be any combination of ReadOnly,
+   * DontEnum and DontDelete.
+   */
+  void SetPrototypeAttributes(int attributes);
+
+  /**
    * Returns true if the given object is an instance of this function
    * template.
    */
@@ -2546,17 +2560,12 @@ typedef void (*GCCallback)();
 /**
  * Profiler modules.
  *
- * In V8, profiler consists of several modules: CPU profiler, and different
- * kinds of heap profiling. Each can be turned on / off independently.
- * When PROFILER_MODULE_HEAP_SNAPSHOT flag is passed to ResumeProfilerEx,
- * modules are enabled only temporarily for making a snapshot of the heap.
+ * In V8, profiler consists of several modules. Each can be turned on / off
+ * independently.
  */
 enum ProfilerModules {
   PROFILER_MODULE_NONE            = 0,
-  PROFILER_MODULE_CPU             = 1,
-  PROFILER_MODULE_HEAP_STATS      = 1 << 1,
-  PROFILER_MODULE_JS_CONSTRUCTORS = 1 << 2,
-  PROFILER_MODULE_HEAP_SNAPSHOT   = 1 << 16
+  PROFILER_MODULE_CPU             = 1
 };
 
 
@@ -3098,8 +3107,10 @@ class V8EXPORT V8 {
    * because of a call to TerminateExecution.  In that case there are
    * still JavaScript frames on the stack and the termination
    * exception is still active.
+   *
+   * \param isolate The isolate in which to check.
    */
-  static bool IsExecutionTerminating();
+  static bool IsExecutionTerminating(Isolate* isolate = NULL);
 
   /**
    * Releases any resources used by v8 and stops any utility threads
@@ -3726,7 +3737,7 @@ class Internals {
   static const int kFullStringRepresentationMask = 0x07;
   static const int kExternalTwoByteRepresentationTag = 0x02;
 
-  static const int kJSObjectType = 0xa2;
+  static const int kJSObjectType = 0xa3;
   static const int kFirstNonstringType = 0x80;
   static const int kForeignType = 0x85;
 

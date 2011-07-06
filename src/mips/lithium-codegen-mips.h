@@ -108,7 +108,7 @@ class LCodeGen BASE_EMBEDDED {
   void DoDeferredNumberTagI(LNumberTagI* instr);
   void DoDeferredTaggedToI(LTaggedToI* instr);
   void DoDeferredMathAbsTaggedHeapNumber(LUnaryMathOperation* instr);
-  void DoDeferredStackCheck(LGoto* instr);
+  void DoDeferredStackCheck(LStackCheck* instr);
   void DoDeferredStringCharCodeAt(LStringCharCodeAt* instr);
   void DoDeferredStringCharFromCode(LStringCharFromCode* instr);
   void DoDeferredLInstanceOfKnownGlobal(LInstanceOfKnownGlobal* instr,
@@ -272,7 +272,7 @@ class LCodeGen BASE_EMBEDDED {
   }
 
   static Condition TokenToCondition(Token::Value op, bool is_unsigned);
-  void EmitGoto(int block, LDeferredCode* deferred_stack_check = NULL);
+  void EmitGoto(int block);
   void EmitBranch(int left_block,
                   int right_block,
                   Condition cond,
@@ -282,9 +282,15 @@ class LCodeGen BASE_EMBEDDED {
                   Condition cond, Register src1, Register src2) {
     EmitBranch(left_block, right_block, cond, src1, Operand(src2));
   }
+  void EmitBranchF(int left_block,
+                   int right_block,
+                   Condition cond,
+                   FPURegister src1,
+                   FPURegister src2);
   void EmitCmpI(LOperand* left, LOperand* right);
   void EmitNumberUntagD(Register input,
                         DoubleRegister result,
+                        bool deoptimize_on_undefined,
                         LInstruction* instr);
 
   void TrueFalseRoot(Register result, Label* is_true);

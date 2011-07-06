@@ -113,21 +113,18 @@ void LInstruction::PrintTo(StringStream* stream) {
 template<int R, int I, int T>
 void LTemplateInstruction<R, I, T>::PrintDataTo(StringStream* stream) {
   stream->Add("= ");
-  inputs_.PrintOperandsTo(stream);
+  for (int i = 0; i < inputs_.length(); i++) {
+    if (i > 0) stream->Add(" ");
+    inputs_[i]->PrintTo(stream);
+  }
 }
 
 
 template<int R, int I, int T>
 void LTemplateInstruction<R, I, T>::PrintOutputOperandTo(StringStream* stream) {
-  results_.PrintOperandsTo(stream);
-}
-
-
-template<typename T, int N>
-void OperandContainer<T, N>::PrintOperandsTo(StringStream* stream) {
-  for (int i = 0; i < N; i++) {
+  for (int i = 0; i < results_.length(); i++) {
     if (i > 0) stream->Add(" ");
-    elems_[i]->PrintTo(stream);
+    results_[i]->PrintTo(stream);
   }
 }
 
@@ -393,8 +390,7 @@ void LChunk::MarkEmptyBlocks() {
     LLabel* label = LLabel::cast(first_instr);
     if (last_instr->IsGoto()) {
       LGoto* goto_instr = LGoto::cast(last_instr);
-      if (!goto_instr->include_stack_check() &&
-          label->IsRedundant() &&
+      if (label->IsRedundant() &&
           !label->is_loop_header()) {
         bool can_eliminate = true;
         for (int i = first + 1; i < last && can_eliminate; ++i) {
@@ -1041,11 +1037,7 @@ LEnvironment* LChunkBuilder::CreateEnvironment(HEnvironment* hydrogen_env) {
 
 
 LInstruction* LChunkBuilder::DoGoto(HGoto* instr) {
-  LGoto* result = new LGoto(instr->FirstSuccessor()->block_id(),
-                            instr->include_stack_check());
-  return (instr->include_stack_check())
-      ? AssignPointerMap(result)
-      : result;
+  return new LGoto(instr->FirstSuccessor()->block_id());
 }
 
 
@@ -1103,14 +1095,13 @@ LInstruction* LChunkBuilder::DoTest(HTest* instr) {
     HIsObject* compare = HIsObject::cast(v);
     ASSERT(compare->value()->representation().IsTagged());
     return new LIsObjectAndBranch(UseRegisterAtStart(compare->value()));
-  } else if (v->IsCompareJSObjectEq()) {
-    HCompareJSObjectEq* compare = HCompareJSObjectEq::cast(v);
-    return new LCmpJSObjectEqAndBranch(UseRegisterAtStart(compare->left()),
-                                       UseRegisterAtStart(compare->right()));
-  } else if (v->IsCompareSymbolEq()) {
-    HCompareSymbolEq* compare = HCompareSymbolEq::cast(v);
-    return new LCmpSymbolEqAndBranch(UseRegisterAtStart(compare->left()),
+  } else if (v->IsCompareObjectEq()) {
+    HCompareObjectEq* compare = HCompareObjectEq::cast(v);
+    return new LCmpObjectEqAndBranch(UseRegisterAtStart(compare->left()),
                                      UseRegisterAtStart(compare->right()));
+  } else if (v->IsCompareConstantEq()) {
+    HCompareConstantEq* compare = HCompareConstantEq::cast(v);
+    return new LCmpConstantEqAndBranch(UseRegisterAtStart(compare->value()));
   } else if (v->IsTypeofIs()) {
     HTypeofIs* typeof_is = HTypeofIs::cast(v);
     return new LTypeofIsAndBranch(UseTempRegister(typeof_is->value()));
@@ -1504,21 +1495,18 @@ LInstruction* LChunkBuilder::DoCompare(HCompare* instr) {
 }
 
 
-LInstruction* LChunkBuilder::DoCompareJSObjectEq(
-    HCompareJSObjectEq* instr) {
+LInstruction* LChunkBuilder::DoCompareObjectEq(HCompareObjectEq* instr) {
   LOperand* left = UseRegisterAtStart(instr->left());
   LOperand* right = UseRegisterAtStart(instr->right());
-  LCmpJSObjectEq* result = new LCmpJSObjectEq(left, right);
+  LCmpObjectEq* result = new LCmpObjectEq(left, right);
   return DefineAsRegister(result);
 }
 
 
-LInstruction* LChunkBuilder::DoCompareSymbolEq(
-    HCompareSymbolEq* instr) {
-  LOperand* left = UseRegisterAtStart(instr->left());
-  LOperand* right = UseRegisterAtStart(instr->right());
-  LCmpSymbolEq* result = new LCmpSymbolEq(left, right);
-  return DefineAsRegister(result);
+LInstruction* LChunkBuilder::DoCompareConstantEq(
+    HCompareConstantEq* instr) {
+  LOperand* left = UseRegisterAtStart(instr->value());
+  return DefineAsRegister(new LCmpConstantEq(left));
 }
 
 
@@ -1601,6 +1589,12 @@ LInstruction* LChunkBuilder::DoExternalArrayLength(
     HExternalArrayLength* instr) {
   LOperand* array = UseRegisterAtStart(instr->value());
   return DefineAsRegister(new LExternalArrayLength(array));
+}
+
+
+LInstruction* LChunkBuilder::DoElementsKind(HElementsKind* instr) {
+  LOperand* object = UseRegisterAtStart(instr->value());
+  return DefineAsRegister(new LElementsKind(object));
 }
 
 
@@ -1920,13 +1914,15 @@ LInstruction* LChunkBuilder::DoLoadKeyedFastElement(
 
 LInstruction* LChunkBuilder::DoLoadKeyedSpecializedArrayElement(
     HLoadKeyedSpecializedArrayElement* instr) {
-  ExternalArrayType array_type = instr->array_type();
+  JSObject::ElementsKind elements_kind = instr->elements_kind();
   Representation representation(instr->representation());
   ASSERT(
-      (representation.IsInteger32() && (array_type != kExternalFloatArray &&
-                                        array_type != kExternalDoubleArray)) ||
-      (representation.IsDouble() && (array_type == kExternalFloatArray ||
-                                     array_type == kExternalDoubleArray)));
+      (representation.IsInteger32() &&
+       (elements_kind != JSObject::EXTERNAL_FLOAT_ELEMENTS) &&
+       (elements_kind != JSObject::EXTERNAL_DOUBLE_ELEMENTS)) ||
+      (representation.IsDouble() &&
+       ((elements_kind == JSObject::EXTERNAL_FLOAT_ELEMENTS) ||
+       (elements_kind == JSObject::EXTERNAL_DOUBLE_ELEMENTS))));
   ASSERT(instr->key()->representation().IsInteger32());
   LOperand* external_pointer = UseRegister(instr->external_pointer());
   LOperand* key = UseRegisterOrConstant(instr->key());
@@ -1935,7 +1931,7 @@ LInstruction* LChunkBuilder::DoLoadKeyedSpecializedArrayElement(
   LInstruction* load_instr = DefineAsRegister(result);
   // An unsigned int array load might overflow and cause a deopt, make sure it
   // has an environment.
-  return (array_type == kExternalUnsignedIntArray) ?
+  return (elements_kind == JSObject::EXTERNAL_UNSIGNED_INT_ELEMENTS) ?
       AssignEnvironment(load_instr) : load_instr;
 }
 
@@ -1971,18 +1967,21 @@ LInstruction* LChunkBuilder::DoStoreKeyedFastElement(
 LInstruction* LChunkBuilder::DoStoreKeyedSpecializedArrayElement(
     HStoreKeyedSpecializedArrayElement* instr) {
   Representation representation(instr->value()->representation());
-  ExternalArrayType array_type = instr->array_type();
+  JSObject::ElementsKind elements_kind = instr->elements_kind();
   ASSERT(
-      (representation.IsInteger32() && (array_type != kExternalFloatArray &&
-                                        array_type != kExternalDoubleArray)) ||
-      (representation.IsDouble() && (array_type == kExternalFloatArray ||
-                                     array_type == kExternalDoubleArray)));
+      (representation.IsInteger32() &&
+       (elements_kind != JSObject::EXTERNAL_FLOAT_ELEMENTS) &&
+       (elements_kind != JSObject::EXTERNAL_DOUBLE_ELEMENTS)) ||
+      (representation.IsDouble() &&
+       ((elements_kind == JSObject::EXTERNAL_FLOAT_ELEMENTS) ||
+       (elements_kind == JSObject::EXTERNAL_DOUBLE_ELEMENTS))));
   ASSERT(instr->external_pointer()->representation().IsExternal());
   ASSERT(instr->key()->representation().IsInteger32());
 
   LOperand* external_pointer = UseRegister(instr->external_pointer());
-  bool val_is_temp_register = array_type == kExternalPixelArray ||
-      array_type == kExternalFloatArray;
+  bool val_is_temp_register =
+      elements_kind == JSObject::EXTERNAL_PIXEL_ELEMENTS ||
+      elements_kind == JSObject::EXTERNAL_FLOAT_ELEMENTS;
   LOperand* val = val_is_temp_register
       ? UseTempRegister(instr->value())
       : UseRegister(instr->value());
@@ -2108,6 +2107,10 @@ LInstruction* LChunkBuilder::DoParameter(HParameter* instr) {
 
 LInstruction* LChunkBuilder::DoUnknownOSRValue(HUnknownOSRValue* instr) {
   int spill_index = chunk()->GetNextSpillIndex(false);  // Not double-width.
+  if (spill_index > LUnallocated::kMaxFixedIndex) {
+    Abort("Too many spill slots needed for OSR");
+    spill_index = 0;
+  }
   return DefineAsSpilled(new LUnknownOSRValue, spill_index);
 }
 
@@ -2191,7 +2194,12 @@ LInstruction* LChunkBuilder::DoSimulate(HSimulate* instr) {
 
 
 LInstruction* LChunkBuilder::DoStackCheck(HStackCheck* instr) {
-  return MarkAsCall(new LStackCheck, instr);
+  if (instr->is_function_entry()) {
+    return MarkAsCall(new LStackCheck, instr);
+  } else {
+    ASSERT(instr->is_backwards_branch());
+    return AssignEnvironment(AssignPointerMap(new LStackCheck));
+  }
 }
 
 
@@ -2200,7 +2208,6 @@ LInstruction* LChunkBuilder::DoEnterInlined(HEnterInlined* instr) {
   HConstant* undefined = graph()->GetConstantUndefined();
   HEnvironment* inner = outer->CopyForInlining(instr->closure(),
                                                instr->function(),
-                                               HEnvironment::LITHIUM,
                                                undefined,
                                                instr->call_kind());
   current_block_->UpdateEnvironment(inner);

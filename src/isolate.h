@@ -69,7 +69,6 @@ class InlineRuntimeFunctionsTable;
 class NoAllocationStringAllocator;
 class PcToCodeCache;
 class PreallocatedMemoryThread;
-class ProducerHeapProfile;
 class RegExpStack;
 class SaveContext;
 class UnicodeCache;
@@ -595,7 +594,7 @@ class Isolate {
     return thread_local_top_.scheduled_exception_;
   }
   bool has_scheduled_exception() {
-    return !thread_local_top_.scheduled_exception_->IsTheHole();
+    return thread_local_top_.scheduled_exception_ != heap_.the_hole_value();
   }
   void clear_scheduled_exception() {
     thread_local_top_.scheduled_exception_ = heap_.the_hole_value();
@@ -907,12 +906,6 @@ class Isolate {
 
   inline bool DebuggerHasBreakPoints();
 
-#ifdef ENABLE_LOGGING_AND_PROFILING
-  ProducerHeapProfile* producer_heap_profile() {
-    return producer_heap_profile_;
-  }
-#endif
-
 #ifdef DEBUG
   HistogramInfo* heap_histograms() { return heap_histograms_; }
 
@@ -1170,10 +1163,6 @@ class Isolate {
 #ifdef ENABLE_DEBUGGER_SUPPORT
   Debugger* debugger_;
   Debug* debug_;
-#endif
-
-#ifdef ENABLE_LOGGING_AND_PROFILING
-  ProducerHeapProfile* producer_heap_profile_;
 #endif
 
 #define GLOBAL_BACKING_STORE(type, name, initialvalue)                         \
