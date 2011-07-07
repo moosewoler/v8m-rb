@@ -265,12 +265,6 @@ void LClassOfTestAndBranch::PrintDataTo(StringStream* stream) {
 }
 
 
-void LTypeofIs::PrintDataTo(StringStream* stream) {
-  InputAt(0)->PrintTo(stream);
-  stream->Add(" == \"%s\"", *hydrogen()->type_literal()->ToCString());
-}
-
-
 void LTypeofIsAndBranch::PrintDataTo(StringStream* stream) {
   stream->Add("if typeof ");
   InputAt(0)->PrintTo(stream);
@@ -337,13 +331,6 @@ void LCallNew::PrintDataTo(StringStream* stream) {
   stream->Add("= ");
   InputAt(0)->PrintTo(stream);
   stream->Add(" #%d / ", arity());
-}
-
-
-void LClassOfTest::PrintDataTo(StringStream* stream) {
-  stream->Add("= class_of_test(");
-  InputAt(0)->PrintTo(stream);
-  stream->Add(", \"%o\")", *hydrogen()->class_name());
 }
 
 
@@ -822,7 +809,7 @@ LInstruction* LChunkBuilder::DoBit(Token::Value op,
 
     LOperand* left = UseRegisterAtStart(instr->LeastConstantOperand());
     LOperand* right = UseOrConstantAtStart(instr->MostConstantOperand());
-    return DefineSameAsFirst(new LBitI(op, left, right));
+    return DefineAsRegister(new LBitI(op, left, right));
   } else {
     ASSERT(instr->representation().IsTagged());
     ASSERT(instr->left()->representation().IsTagged());
@@ -849,11 +836,11 @@ LInstruction* LChunkBuilder::DoShift(Token::Value op,
   }
 
   ASSERT(instr->representation().IsInteger32());
-  ASSERT(instr->OperandAt(0)->representation().IsInteger32());
-  ASSERT(instr->OperandAt(1)->representation().IsInteger32());
-  LOperand* left = UseRegisterAtStart(instr->OperandAt(0));
+  ASSERT(instr->left()->representation().IsInteger32());
+  ASSERT(instr->right()->representation().IsInteger32());
+  LOperand* left = UseRegisterAtStart(instr->left());
 
-  HValue* right_value = instr->OperandAt(1);
+  HValue* right_value = instr->right();
   LOperand* right = NULL;
   int constant_value = 0;
   if (right_value->IsConstant()) {
@@ -861,7 +848,7 @@ LInstruction* LChunkBuilder::DoShift(Token::Value op,
     right = chunk_->DefineConstantOperand(constant);
     constant_value = constant->Integer32Value() & 0x1f;
   } else {
-    right = UseRegister(right_value);
+    right = UseRegisterAtStart(right_value);
   }
 
   // Shift operations can only deoptimize if we do a logical shift
@@ -878,7 +865,7 @@ LInstruction* LChunkBuilder::DoShift(Token::Value op,
   }
 
   LInstruction* result =
-      DefineSameAsFirst(new LShiftI(op, left, right, does_deopt));
+      DefineAsRegister(new LShiftI(op, left, right, does_deopt));
   return does_deopt ? AssignEnvironment(result) : result;
 }
 
@@ -892,7 +879,7 @@ LInstruction* LChunkBuilder::DoArithmeticD(Token::Value op,
   LOperand* left = UseRegisterAtStart(instr->left());
   LOperand* right = UseRegisterAtStart(instr->right());
   LArithmeticD* result = new LArithmeticD(op, left, right);
-  return DefineSameAsFirst(result);
+  return DefineAsRegister(result);
 }
 
 
@@ -990,18 +977,7 @@ void LChunkBuilder::VisitInstruction(HInstruction* current) {
     if (FLAG_stress_environments && !instr->HasEnvironment()) {
       instr = AssignEnvironment(instr);
     }
-    if (current->IsTest() && !instr->IsGoto()) {
-      ASSERT(instr->IsControl());
-      HTest* test = HTest::cast(current);
-      instr->set_hydrogen_value(test->value());
-      HBasicBlock* first = test->FirstSuccessor();
-      HBasicBlock* second = test->SecondSuccessor();
-      ASSERT(first != NULL && second != NULL);
-      instr->SetBranchTargets(first->block_id(), second->block_id());
-    } else {
-      instr->set_hydrogen_value(current);
-    }
-
+    instr->set_hydrogen_value(current);
     chunk_->AddInstruction(instr, current_block_);
   }
   current_instruction_ = old_current;
@@ -1046,80 +1022,15 @@ LInstruction* LChunkBuilder::DoGoto(HGoto* instr) {
 }
 
 
-LInstruction* LChunkBuilder::DoTest(HTest* instr) {
+LInstruction* LChunkBuilder::DoBranch(HBranch* instr) {
   HValue* v = instr->value();
-  if (!v->EmitAtUses()) return new LBranch(UseRegisterAtStart(v));
-  ASSERT(!v->HasSideEffects());
-  if (v->IsClassOfTest()) {
-    HClassOfTest* compare = HClassOfTest::cast(v);
-    ASSERT(compare->value()->representation().IsTagged());
-    return new LClassOfTestAndBranch(UseTempRegister(compare->value()),
-                                     TempRegister());
-  } else if (v->IsCompare()) {
-    HCompare* compare = HCompare::cast(v);
-    HValue* left = compare->left();
-    HValue* right = compare->right();
-    Representation r = compare->GetInputRepresentation();
-    if (r.IsInteger32()) {
-      ASSERT(left->representation().IsInteger32());
-      ASSERT(right->representation().IsInteger32());
-      return new LCmpIDAndBranch(UseRegisterAtStart(left),
-                                 UseRegisterAtStart(right));
-    } else {
-      ASSERT(r.IsDouble());
-      ASSERT(left->representation().IsDouble());
-      ASSERT(right->representation().IsDouble());
-      return new LCmpIDAndBranch(UseRegisterAtStart(left),
-                                 UseRegisterAtStart(right));
-    }
-  } else if (v->IsIsSmi()) {
-    HIsSmi* compare = HIsSmi::cast(v);
-    ASSERT(compare->value()->representation().IsTagged());
-    return new LIsSmiAndBranch(Use(compare->value()));
-  } else if (v->IsIsUndetectable()) {
-    HIsUndetectable* compare = HIsUndetectable::cast(v);
-    ASSERT(compare->value()->representation().IsTagged());
-    return new LIsUndetectableAndBranch(UseRegisterAtStart(compare->value()),
-                                        TempRegister());
-  } else if (v->IsHasInstanceType()) {
-    HHasInstanceType* compare = HHasInstanceType::cast(v);
-    ASSERT(compare->value()->representation().IsTagged());
-    return new LHasInstanceTypeAndBranch(UseRegisterAtStart(compare->value()));
-  } else if (v->IsHasCachedArrayIndex()) {
-    HHasCachedArrayIndex* compare = HHasCachedArrayIndex::cast(v);
-    ASSERT(compare->value()->representation().IsTagged());
-    return new LHasCachedArrayIndexAndBranch(
-        UseRegisterAtStart(compare->value()));
-  } else if (v->IsIsNull()) {
-    HIsNull* compare = HIsNull::cast(v);
-    ASSERT(compare->value()->representation().IsTagged());
-    return new LIsNullAndBranch(UseRegisterAtStart(compare->value()));
-  } else if (v->IsIsObject()) {
-    HIsObject* compare = HIsObject::cast(v);
-    ASSERT(compare->value()->representation().IsTagged());
-    LOperand* temp = TempRegister();
-    return new LIsObjectAndBranch(UseRegister(compare->value()), temp);
-  } else if (v->IsCompareObjectEq()) {
-    HCompareObjectEq* compare = HCompareObjectEq::cast(v);
-    return new LCmpObjectEqAndBranch(UseRegisterAtStart(compare->left()),
-                                     UseRegisterAtStart(compare->right()));
-  } else if (v->IsCompareConstantEq()) {
-    HCompareConstantEq* compare = HCompareConstantEq::cast(v);
-    return new LCmpConstantEqAndBranch(UseRegisterAtStart(compare->value()));
-  } else if (v->IsTypeofIs()) {
-    HTypeofIs* typeof_is = HTypeofIs::cast(v);
-    return new LTypeofIsAndBranch(UseTempRegister(typeof_is->value()));
-  } else if (v->IsIsConstructCall()) {
-    return new LIsConstructCallAndBranch(TempRegister());
-  } else if (v->IsConstant()) {
+  if (v->EmitAtUses()) {
     HBasicBlock* successor = HConstant::cast(v)->ToBoolean()
         ? instr->FirstSuccessor()
         : instr->SecondSuccessor();
     return new LGoto(successor->block_id());
-  } else {
-    Abort("Undefined compare before branch");
-    return NULL;
   }
+  return new LBranch(UseRegisterAtStart(v));
 }
 
 
@@ -1152,7 +1063,7 @@ LInstruction* LChunkBuilder::DoInstanceOf(HInstanceOf* instr) {
 LInstruction* LChunkBuilder::DoInstanceOfKnownGlobal(
     HInstanceOfKnownGlobal* instr) {
   LInstanceOfKnownGlobal* result =
-      new LInstanceOfKnownGlobal(UseFixed(instr->value(), a0), FixedTemp(t0));
+      new LInstanceOfKnownGlobal(UseFixed(instr->left(), a0), FixedTemp(t0));
   return MarkAsCall(DefineFixed(result, v0), instr);
 }
 
@@ -1232,15 +1143,15 @@ LInstruction* LChunkBuilder::DoUnaryMathOperation(HUnaryMathOperation* instr) {
     LUnaryMathOperation* result = new LUnaryMathOperation(input, temp);
     switch (op) {
       case kMathAbs:
-        return AssignEnvironment(AssignPointerMap(DefineSameAsFirst(result)));
+        return AssignEnvironment(AssignPointerMap(DefineAsRegister(result)));
       case kMathFloor:
         return AssignEnvironment(AssignPointerMap(DefineAsRegister(result)));
       case kMathSqrt:
-        return DefineSameAsFirst(result);
+        return DefineAsRegister(result);
       case kMathRound:
         return AssignEnvironment(DefineAsRegister(result));
       case kMathPowHalf:
-        return DefineSameAsFirst(result);
+        return DefineAsRegister(result);
       default:
         UNREACHABLE();
         return NULL;
@@ -1318,7 +1229,7 @@ LInstruction* LChunkBuilder::DoBitAnd(HBitAnd* instr) {
 LInstruction* LChunkBuilder::DoBitNot(HBitNot* instr) {
   ASSERT(instr->value()->representation().IsInteger32());
   ASSERT(instr->representation().IsInteger32());
-  return DefineSameAsFirst(new LBitNotI(UseRegisterAtStart(instr->value())));
+  return DefineAsRegister(new LBitNotI(UseRegisterAtStart(instr->value())));
 }
 
 
@@ -1365,15 +1276,20 @@ LInstruction* LChunkBuilder::DoMod(HMod* instr) {
       mod = new LModI(value, UseOrConstant(instr->right()));
     } else {
       LOperand* dividend = UseRegister(instr->left());
-      LOperand* divisor = UseRegisterAtStart(instr->right());
+      LOperand* divisor = UseRegister(instr->right());
       mod = new LModI(dividend,
                       divisor,
                       TempRegister(),
-                      FixedTemp(f2),
-                      FixedTemp(f4));
+                      FixedTemp(f20),
+                      FixedTemp(f22));
     }
 
-    return AssignEnvironment(DefineSameAsFirst(mod));
+    if (instr->CheckFlag(HValue::kBailoutOnMinusZero) ||
+        instr->CheckFlag(HValue::kCanBeDivByZero)) {
+      return AssignEnvironment(DefineAsRegister(mod));
+    } else {
+      return DefineAsRegister(mod);
+    }
   } else if (instr->representation().IsTagged()) {
     return DoArithmeticT(Token::MOD, instr);
   } else {
@@ -1393,16 +1309,22 @@ LInstruction* LChunkBuilder::DoMul(HMul* instr) {
   if (instr->representation().IsInteger32()) {
     ASSERT(instr->left()->representation().IsInteger32());
     ASSERT(instr->right()->representation().IsInteger32());
-    LOperand* left = UseRegisterAtStart(instr->LeastConstantOperand());
+    LOperand* left;
     LOperand* right = UseOrConstant(instr->MostConstantOperand());
     LOperand* temp = NULL;
-    if (instr->CheckFlag(HValue::kBailoutOnMinusZero)) {
+    if (instr->CheckFlag(HValue::kBailoutOnMinusZero) &&
+        (instr->CheckFlag(HValue::kCanOverflow) ||
+        !right->IsConstantOperand())) {
+      left = UseRegister(instr->LeastConstantOperand());
       temp = TempRegister();
+    } else {
+      left = UseRegisterAtStart(instr->LeastConstantOperand());
     }
-    LMulI* mul = new LMulI(left, right, temp);
-    return AssignEnvironment(DefineSameAsFirst(mul));
+    return AssignEnvironment(DefineAsRegister(new LMulI(left, right, temp)));
+
   } else if (instr->representation().IsDouble()) {
     return DoArithmeticD(Token::MUL, instr);
+
   } else {
     return DoArithmeticT(Token::MUL, instr);
   }
@@ -1416,7 +1338,7 @@ LInstruction* LChunkBuilder::DoSub(HSub* instr) {
     LOperand* left = UseRegisterAtStart(instr->left());
     LOperand* right = UseOrConstantAtStart(instr->right());
     LSubI* sub = new LSubI(left, right);
-    LInstruction* result = DefineSameAsFirst(sub);
+    LInstruction* result = DefineAsRegister(sub);
     if (instr->CheckFlag(HValue::kCanOverflow)) {
       result = AssignEnvironment(result);
     }
@@ -1436,7 +1358,7 @@ LInstruction* LChunkBuilder::DoAdd(HAdd* instr) {
     LOperand* left = UseRegisterAtStart(instr->LeastConstantOperand());
     LOperand* right = UseOrConstantAtStart(instr->MostConstantOperand());
     LAddI* add = new LAddI(left, right);
-    LInstruction* result = DefineSameAsFirst(add);
+    LInstruction* result = DefineAsRegister(add);
     if (instr->CheckFlag(HValue::kCanOverflow)) {
       result = AssignEnvironment(result);
     }
@@ -1468,85 +1390,84 @@ LInstruction* LChunkBuilder::DoPower(HPower* instr) {
 }
 
 
-LInstruction* LChunkBuilder::DoCompare(HCompare* instr) {
+LInstruction* LChunkBuilder::DoCompareGeneric(HCompareGeneric* instr) {
   Token::Value op = instr->token();
+  Representation r = instr->GetInputRepresentation();
+  ASSERT(instr->left()->representation().IsTagged());
+  ASSERT(instr->right()->representation().IsTagged());
+  bool reversed = (op == Token::GT || op == Token::LTE);
+  LOperand* left = UseFixed(instr->left(), reversed ? a0 : a1);
+  LOperand* right = UseFixed(instr->right(), reversed ? a1 : a0);
+  LCmpT* result = new LCmpT(left, right);
+  return MarkAsCall(DefineFixed(result, v0), instr);
+}
+
+
+LInstruction* LChunkBuilder::DoCompareIDAndBranch(
+    HCompareIDAndBranch* instr) {
   Representation r = instr->GetInputRepresentation();
   if (r.IsInteger32()) {
     ASSERT(instr->left()->representation().IsInteger32());
     ASSERT(instr->right()->representation().IsInteger32());
     LOperand* left = UseRegisterAtStart(instr->left());
     LOperand* right = UseRegisterAtStart(instr->right());
-    return DefineAsRegister(new LCmpID(left, right));
-  } else if (r.IsDouble()) {
+    return new LCmpIDAndBranch(left, right);
+  } else {
+    ASSERT(r.IsDouble());
     ASSERT(instr->left()->representation().IsDouble());
     ASSERT(instr->right()->representation().IsDouble());
     LOperand* left = UseRegisterAtStart(instr->left());
     LOperand* right = UseRegisterAtStart(instr->right());
-    return DefineAsRegister(new LCmpID(left, right));
-  } else {
-    ASSERT(instr->left()->representation().IsTagged());
-    ASSERT(instr->right()->representation().IsTagged());
-    bool reversed = (op == Token::GT || op == Token::LTE);
-    LOperand* left = UseFixed(instr->left(), reversed ? a0 : a1);
-    LOperand* right = UseFixed(instr->right(), reversed ? a1 : a0);
-    LCmpT* result = new LCmpT(left, right);
-    return MarkAsCall(DefineFixed(result, v0), instr);
+    return new LCmpIDAndBranch(left, right);
   }
 }
 
 
-LInstruction* LChunkBuilder::DoCompareObjectEq(HCompareObjectEq* instr) {
+LInstruction* LChunkBuilder::DoCompareObjectEqAndBranch(
+    HCompareObjectEqAndBranch* instr) {
   LOperand* left = UseRegisterAtStart(instr->left());
   LOperand* right = UseRegisterAtStart(instr->right());
-  LCmpObjectEq* result = new LCmpObjectEq(left, right);
-  return DefineAsRegister(result);
+  return new LCmpObjectEqAndBranch(left, right);
 }
 
 
-LInstruction* LChunkBuilder::DoCompareConstantEq(
-    HCompareConstantEq* instr) {
-  LOperand* left = UseRegisterAtStart(instr->value());
-  return DefineAsRegister(new LCmpConstantEq(left));
+LInstruction* LChunkBuilder::DoCompareConstantEqAndBranch(
+    HCompareConstantEqAndBranch* instr) {
+  return new LCmpConstantEqAndBranch(UseRegisterAtStart(instr->value()));
 }
 
 
-LInstruction* LChunkBuilder::DoIsNull(HIsNull* instr) {
+LInstruction* LChunkBuilder::DoIsNullAndBranch(HIsNullAndBranch* instr) {
   ASSERT(instr->value()->representation().IsTagged());
-  LOperand* value = UseRegisterAtStart(instr->value());
-
-  return DefineAsRegister(new LIsNull(value));
+  return new LIsNullAndBranch(UseRegisterAtStart(instr->value()));
 }
 
 
-LInstruction* LChunkBuilder::DoIsObject(HIsObject* instr) {
+LInstruction* LChunkBuilder::DoIsObjectAndBranch(HIsObjectAndBranch* instr) {
   ASSERT(instr->value()->representation().IsTagged());
-  LOperand* value = UseRegisterAtStart(instr->value());
-
-  return DefineAsRegister(new LIsObject(value));
+  LOperand* temp = TempRegister();
+  return new LIsObjectAndBranch(UseRegisterAtStart(instr->value()), temp);
 }
 
 
-LInstruction* LChunkBuilder::DoIsSmi(HIsSmi* instr) {
+LInstruction* LChunkBuilder::DoIsSmiAndBranch(HIsSmiAndBranch* instr) {
   ASSERT(instr->value()->representation().IsTagged());
-  LOperand* value = UseAtStart(instr->value());
-
-  return DefineAsRegister(new LIsSmi(value));
+  return new LIsSmiAndBranch(Use(instr->value()));
 }
 
 
-LInstruction* LChunkBuilder::DoIsUndetectable(HIsUndetectable* instr) {
+LInstruction* LChunkBuilder::DoIsUndetectableAndBranch(
+    HIsUndetectableAndBranch* instr) {
   ASSERT(instr->value()->representation().IsTagged());
-  LOperand* value = UseRegisterAtStart(instr->value());
-
-  return DefineAsRegister(new LIsUndetectable(value));
+  return new LIsUndetectableAndBranch(UseRegisterAtStart(instr->value()),
+                                      TempRegister());
 }
 
 
-LInstruction* LChunkBuilder::DoHasInstanceType(HHasInstanceType* instr) {
+LInstruction* LChunkBuilder::DoHasInstanceTypeAndBranch(
+    HHasInstanceTypeAndBranch* instr) {
   ASSERT(instr->value()->representation().IsTagged());
-  LOperand* value = UseRegisterAtStart(instr->value());
-
-  return DefineAsRegister(new LHasInstanceType(value));
+  return new LHasInstanceTypeAndBranch(UseRegisterAtStart(instr->value()));
 }
 
 
@@ -1559,19 +1480,19 @@ LInstruction* LChunkBuilder::DoGetCachedArrayIndex(
 }
 
 
-LInstruction* LChunkBuilder::DoHasCachedArrayIndex(
-    HHasCachedArrayIndex* instr) {
+LInstruction* LChunkBuilder::DoHasCachedArrayIndexAndBranch(
+    HHasCachedArrayIndexAndBranch* instr) {
   ASSERT(instr->value()->representation().IsTagged());
-  LOperand* value = UseRegister(instr->value());
-
-  return DefineAsRegister(new LHasCachedArrayIndex(value));
+  return new LHasCachedArrayIndexAndBranch(
+      UseRegisterAtStart(instr->value()));
 }
 
 
-LInstruction* LChunkBuilder::DoClassOfTest(HClassOfTest* instr) {
+LInstruction* LChunkBuilder::DoClassOfTestAndBranch(
+    HClassOfTestAndBranch* instr) {
   ASSERT(instr->value()->representation().IsTagged());
-  LOperand* value = UseTempRegister(instr->value());
-  return DefineSameAsFirst(new LClassOfTest(value));
+  return new LClassOfTestAndBranch(UseTempRegister(instr->value()),
+                                   TempRegister());
 }
 
 
@@ -1603,7 +1524,7 @@ LInstruction* LChunkBuilder::DoElementsKind(HElementsKind* instr) {
 LInstruction* LChunkBuilder::DoValueOf(HValueOf* instr) {
   LOperand* object = UseRegister(instr->value());
   LValueOf* result = new LValueOf(object, TempRegister());
-  return AssignEnvironment(DefineSameAsFirst(result));
+  return AssignEnvironment(DefineAsRegister(result));
 }
 
 
@@ -1658,7 +1579,7 @@ LInstruction* LChunkBuilder::DoChange(HChange* instr) {
         LOperand* temp1 = TempRegister();
         LOperand* temp2 = instr->CanTruncateToInt32() ? TempRegister()
                                                       : NULL;
-        LOperand* temp3 = instr->CanTruncateToInt32() ? FixedTemp(f6)
+        LOperand* temp3 = instr->CanTruncateToInt32() ? FixedTemp(f22)
                                                       : NULL;
         res = DefineSameAsFirst(new LTaggedToI(value, temp1, temp2, temp3));
         res = AssignEnvironment(res);
@@ -1752,16 +1673,15 @@ LInstruction* LChunkBuilder::DoClampToUint8(HClampToUint8* instr) {
   Representation input_rep = value->representation();
   LOperand* reg = UseRegister(value);
   if (input_rep.IsDouble()) {
-    // TODO(plind): ARM code reserved d1, we will use f2.
     // Revisit this decision, here and 8 lines below.
-    return DefineAsRegister(new LClampDToUint8(reg, FixedTemp(f2)));
+    return DefineAsRegister(new LClampDToUint8(reg, FixedTemp(f22)));
   } else if (input_rep.IsInteger32()) {
     return DefineAsRegister(new LClampIToUint8(reg));
   } else {
     ASSERT(input_rep.IsTagged());
     // Register allocator doesn't (yet) support allocation of double
-    // temps. Reserve f2 explicitly.
-    LClampTToUint8* result = new LClampTToUint8(reg, FixedTemp(f2));
+    // temps. Reserve f22 explicitly.
+    LClampTToUint8* result = new LClampTToUint8(reg, FixedTemp(f22));
     return AssignEnvironment(DefineAsRegister(result));
   }
 }
@@ -1785,8 +1705,7 @@ LInstruction* LChunkBuilder::DoToInt32(HToInt32* instr) {
     ASSERT(input_rep.IsTagged());
     LOperand* temp1 = TempRegister();
     LOperand* temp2 = TempRegister();
-    // TODO(plind): revisit this fixed assignment, ARM version was d3.
-    LOperand* temp3 = FixedTemp(f6);
+    LOperand* temp3 = FixedTemp(f22);
     LTaggedToI* res = new LTaggedToI(reg, temp1, temp2, temp3);
     return AssignEnvironment(DefineSameAsFirst(res));
   }
@@ -1924,7 +1843,7 @@ LInstruction* LChunkBuilder::DoLoadKeyedFastElement(
   LOperand* obj = UseRegisterAtStart(instr->object());
   LOperand* key = UseRegisterAtStart(instr->key());
   LLoadKeyedFastElement* result = new LLoadKeyedFastElement(obj, key);
-  return AssignEnvironment(DefineSameAsFirst(result));
+  return AssignEnvironment(DefineAsRegister(result));
 }
 
 
@@ -2163,13 +2082,14 @@ LInstruction* LChunkBuilder::DoTypeof(HTypeof* instr) {
 }
 
 
-LInstruction* LChunkBuilder::DoTypeofIs(HTypeofIs* instr) {
-  return DefineSameAsFirst(new LTypeofIs(UseRegister(instr->value())));
+LInstruction* LChunkBuilder::DoTypeofIsAndBranch(HTypeofIsAndBranch* instr) {
+  return new LTypeofIsAndBranch(UseTempRegister(instr->value()));
 }
 
 
-LInstruction* LChunkBuilder::DoIsConstructCall(HIsConstructCall* instr) {
-  return DefineAsRegister(new LIsConstructCall());
+LInstruction* LChunkBuilder::DoIsConstructCallAndBranch(
+    HIsConstructCallAndBranch* instr) {
+  return new LIsConstructCallAndBranch(TempRegister());
 }
 
 

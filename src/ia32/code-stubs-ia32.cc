@@ -136,7 +136,6 @@ void FastNewContextStub::Generate(MacroAssembler* masm) {
   // Setup the fixed slots.
   __ Set(ebx, Immediate(0));  // Set to NULL.
   __ mov(Operand(eax, Context::SlotOffset(Context::CLOSURE_INDEX)), ecx);
-  __ mov(Operand(eax, Context::SlotOffset(Context::FCONTEXT_INDEX)), eax);
   __ mov(Operand(eax, Context::SlotOffset(Context::PREVIOUS_INDEX)), esi);
   __ mov(Operand(eax, Context::SlotOffset(Context::EXTENSION_INDEX)), ebx);
 
@@ -555,12 +554,10 @@ void UnaryOpStub::Generate(MacroAssembler* masm) {
 
 void UnaryOpStub::GenerateTypeTransition(MacroAssembler* masm) {
   __ pop(ecx);  // Save return address.
-  __ push(eax);
-  // the argument is now on top.
-  // Push this stub's key. Although the operation and the type info are
-  // encoded into the key, the encoding is opaque, so push them too.
-  __ push(Immediate(Smi::FromInt(MinorKey())));
+
+  __ push(eax);  // the operand
   __ push(Immediate(Smi::FromInt(op_)));
+  __ push(Immediate(Smi::FromInt(mode_)));
   __ push(Immediate(Smi::FromInt(operand_type_)));
 
   __ push(ecx);  // Push return address.
@@ -568,8 +565,7 @@ void UnaryOpStub::GenerateTypeTransition(MacroAssembler* masm) {
   // Patch the caller to an appropriate specialized stub and return the
   // operation result to the caller of the stub.
   __ TailCallExternalReference(
-      ExternalReference(IC_Utility(IC::kUnaryOp_Patch),
-                        masm->isolate()), 4, 1);
+      ExternalReference(IC_Utility(IC::kUnaryOp_Patch), masm->isolate()), 4, 1);
 }
 
 
@@ -3380,9 +3376,8 @@ void RegExpExecStub::Generate(MacroAssembler* masm) {
   __ bind(&check_code);
   // Check that the irregexp code has been generated for the actual string
   // encoding. If it has, the field contains a code object otherwise it contains
-  // the hole.
-  __ CmpObjectType(edx, CODE_TYPE, ebx);
-  __ j(not_equal, &runtime);
+  // a smi (code flushing support).
+  __ JumpIfSmi(edx, &runtime);
 
   // eax: subject string
   // edx: code

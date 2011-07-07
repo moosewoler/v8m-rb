@@ -1682,7 +1682,9 @@ v8::Local<Value> v8::TryCatch::StackTrace() const {
     i::Handle<i::JSObject> obj(i::JSObject::cast(raw_obj), isolate_);
     i::Handle<i::String> name = isolate_->factory()->LookupAsciiSymbol("stack");
     if (!obj->HasProperty(*name)) return v8::Local<Value>();
-    return v8::Utils::ToLocal(scope.CloseAndEscape(i::GetProperty(obj, name)));
+    i::Handle<i::Object> value = i::GetProperty(obj, name);
+    if (value.is_null()) return v8::Local<Value>();
+    return v8::Utils::ToLocal(scope.CloseAndEscape(value));
   } else {
     return v8::Local<Value>();
   }
@@ -4831,47 +4833,26 @@ void V8::RemoveMemoryAllocationCallback(MemoryAllocationCallback callback) {
 
 void V8::PauseProfiler() {
 #ifdef ENABLE_LOGGING_AND_PROFILING
-  PauseProfilerEx(PROFILER_MODULE_CPU);
+  i::Isolate* isolate = i::Isolate::Current();
+  isolate->logger()->PauseProfiler();
 #endif
 }
 
 
 void V8::ResumeProfiler() {
 #ifdef ENABLE_LOGGING_AND_PROFILING
-  ResumeProfilerEx(PROFILER_MODULE_CPU);
+  i::Isolate* isolate = i::Isolate::Current();
+  isolate->logger()->ResumeProfiler();
 #endif
 }
 
 
 bool V8::IsProfilerPaused() {
 #ifdef ENABLE_LOGGING_AND_PROFILING
-  return LOGGER->GetActiveProfilerModules() & PROFILER_MODULE_CPU;
+  i::Isolate* isolate = i::Isolate::Current();
+  return isolate->logger()->IsProfilerPaused();
 #else
   return true;
-#endif
-}
-
-
-void V8::ResumeProfilerEx(int flags, int tag) {
-#ifdef ENABLE_LOGGING_AND_PROFILING
-  i::Isolate* isolate = i::Isolate::Current();
-  isolate->logger()->ResumeProfiler(flags, tag);
-#endif
-}
-
-
-void V8::PauseProfilerEx(int flags, int tag) {
-#ifdef ENABLE_LOGGING_AND_PROFILING
-  LOGGER->PauseProfiler(flags, tag);
-#endif
-}
-
-
-int V8::GetActiveProfilerModules() {
-#ifdef ENABLE_LOGGING_AND_PROFILING
-  return LOGGER->GetActiveProfilerModules();
-#else
-  return PROFILER_MODULE_NONE;
 #endif
 }
 

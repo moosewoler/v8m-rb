@@ -50,87 +50,6 @@ MacroAssembler::MacroAssembler(Isolate* arg_isolate, void* buffer, int size)
 }
 
 
-// Arguments macros.
-#define COND_TYPED_ARGS Condition cond, Register r1, const Operand& r2
-#define COND_ARGS cond, r1, r2
-
-#define REGISTER_TARGET_BODY(Name) \
-void MacroAssembler::Name(Register target, \
-                          BranchDelaySlot bd) { \
-  Name(Operand(target), bd); \
-} \
-void MacroAssembler::Name(Register target, COND_TYPED_ARGS, \
-                          BranchDelaySlot bd) { \
-  Name(Operand(target), COND_ARGS, bd); \
-}
-
-
-#define INT_PTR_TARGET_BODY(Name) \
-void MacroAssembler::Name(intptr_t target, RelocInfo::Mode rmode, \
-                          BranchDelaySlot bd) { \
-  Name(Operand(target, rmode), bd); \
-} \
-void MacroAssembler::Name(intptr_t target, \
-                          RelocInfo::Mode rmode, \
-                          COND_TYPED_ARGS, \
-                          BranchDelaySlot bd) { \
-  Name(Operand(target, rmode), COND_ARGS, bd); \
-}
-
-
-#define BYTE_PTR_TARGET_BODY(Name) \
-void MacroAssembler::Name(byte* target, RelocInfo::Mode rmode, \
-                          BranchDelaySlot bd) { \
-  Name(reinterpret_cast<intptr_t>(target), rmode, bd); \
-} \
-void MacroAssembler::Name(byte* target, \
-                          RelocInfo::Mode rmode, \
-                          COND_TYPED_ARGS, \
-                          BranchDelaySlot bd) { \
-  Name(reinterpret_cast<intptr_t>(target), rmode, COND_ARGS, bd); \
-}
-
-
-#define CODE_TARGET_BODY(Name) \
-void MacroAssembler::Name(Handle<Code> target, RelocInfo::Mode rmode, \
-                          BranchDelaySlot bd) { \
-  Name(reinterpret_cast<intptr_t>(target.location()), rmode, bd); \
-} \
-void MacroAssembler::Name(Handle<Code> target, \
-                          RelocInfo::Mode rmode, \
-                          COND_TYPED_ARGS, \
-                          BranchDelaySlot bd) { \
-  Name(reinterpret_cast<intptr_t>(target.location()), rmode, COND_ARGS, bd); \
-}
-
-
-REGISTER_TARGET_BODY(Jump)
-REGISTER_TARGET_BODY(Call)
-INT_PTR_TARGET_BODY(Jump)
-INT_PTR_TARGET_BODY(Call)
-BYTE_PTR_TARGET_BODY(Jump)
-BYTE_PTR_TARGET_BODY(Call)
-CODE_TARGET_BODY(Jump)
-CODE_TARGET_BODY(Call)
-
-#undef COND_TYPED_ARGS
-#undef COND_ARGS
-#undef REGISTER_TARGET_BODY
-#undef BYTE_PTR_TARGET_BODY
-#undef CODE_TARGET_BODY
-
-
-void MacroAssembler::Ret(BranchDelaySlot bd) {
-  Jump(Operand(ra), bd);
-}
-
-
-void MacroAssembler::Ret(Condition cond, Register r1, const Operand& r2,
-    BranchDelaySlot bd) {
-  Jump(Operand(ra), cond, r1, r2, bd);
-}
-
-
 void MacroAssembler::LoadRoot(Register destination,
                               Heap::RootListIndex index) {
   lw(destination, MemOperand(s6, index << kPointerSizeLog2));
@@ -743,15 +662,22 @@ void MacroAssembler::Ext(Register rt,
                          uint16_t pos,
                          uint16_t size) {
   ASSERT(pos < 32);
-  ASSERT(pos + size < 32);
+  ASSERT(pos + size < 33);
 
   if (mips32r2) {
     ext_(rt, rs, pos, size);
   } else {
     // Move rs to rt and shift it left then right to get the
     // desired bitfield on the right side and zeroes on the left.
-    sll(rt, rs, 32 - (pos + size));
-    srl(rt, rt, 32 - size);
+    int shift_left = 32 - (pos + size);
+    if (shift_left > 0) {
+      sll(rt, rs, shift_left);
+    }
+
+    int shift_right = 32 - size;
+    if (shift_right > 0) {
+      srl(rt, rt, shift_right);
+    }
   }
 }
 
@@ -794,27 +720,27 @@ void MacroAssembler::Ins(Register rt,
 
 
 void MacroAssembler::Cvt_d_uw(FPURegister fd, FPURegister fs) {
-  // Move the data from fs to t4.
-  mfc1(t4, fs);
-  return Cvt_d_uw(fd, t4);
+  // Move the data from fs to t8.
+  mfc1(t8, fs);
+  Cvt_d_uw(fd, t8);
 }
 
 
 void MacroAssembler::Cvt_d_uw(FPURegister fd, Register rs) {
   // Convert rs to a FP value in fd (and fd + 1).
   // We do this by converting rs minus the MSB to avoid sign conversion,
-  // then adding 2^31-1 and 1 to the result.
+  // then adding 2^31 to the result (if needed).
 
   ASSERT(!fd.is(f20));
   ASSERT(!rs.is(t9));
-  ASSERT(!rs.is(t8));
+  ASSERT(!rs.is(at));
 
-  // Save rs's MSB to t8.
-  And(t8, rs, 0x80000000);
+  // Save rs's MSB to t9.
+  Ext(t9, rs, 31, 1);
   // Remove rs's MSB.
-  And(t9, rs, 0x7FFFFFFF);
-  // Move t9 to fd.
-  mtc1(t9, fd);
+  Ext(at, rs, 0, 31);
+  // Move the result to fd.
+  mtc1(at, fd);
 
   // Convert fd to a real FP value.
   cvt_d_w(fd, fd);
@@ -823,39 +749,33 @@ void MacroAssembler::Cvt_d_uw(FPURegister fd, Register rs) {
 
   // If rs's MSB was 0, it's done.
   // Otherwise we need to add that to the FP register.
-  Branch(&conversion_done, eq, t8, Operand(zero_reg));
+  Branch(&conversion_done, eq, t9, Operand(zero_reg));
 
-  // First load 2^31 - 1 into f20.
-  Or(t9, zero_reg, 0x7FFFFFFF);
-  mtc1(t9, f20);
-
-  // Convert it to FP and add it to fd.
-  cvt_d_w(f20, f20);
+  // Load 2^31 into f20 as its float representation.
+  li(at, 0x41E00000);
+  mtc1(at, f21);
+  mtc1(zero_reg, f20);
+  // Add it to fd.
   add_d(fd, fd, f20);
-  // Now add 1.
-  Or(t9, zero_reg, 1);
-  mtc1(t9, f20);
 
-  cvt_d_w(f20, f20);
-  add_d(fd, fd, f20);
   bind(&conversion_done);
 }
 
 
 void MacroAssembler::Trunc_uw_d(FPURegister fd, FPURegister fs) {
-  Trunc_uw_d(fs, t4);
-  mtc1(t4, fd);
+  Trunc_uw_d(fs, t8);
+  mtc1(t8, fd);
 }
 
 
 void MacroAssembler::Trunc_uw_d(FPURegister fd, Register rs) {
   ASSERT(!fd.is(f22));
-  ASSERT(!rs.is(t8));
+  ASSERT(!rs.is(at));
 
-  // Load 2^31 into f22.
-  Or(t8, zero_reg, 0x80000000);
-  Cvt_d_uw(f22, t8);
-
+  // Load 2^31 into f22 as its float representation.
+  li(at, 0x41E00000);
+  mtc1(at, f23);
+  mtc1(zero_reg, f22);
   // Test if f22 > fd.
   // If fd < 2^31 we can convert it normally.
   Label simple_convert;
@@ -866,11 +786,10 @@ void MacroAssembler::Trunc_uw_d(FPURegister fd, Register rs) {
 
   // First we subtract 2^31 from fd, then trunc it to rs
   // and add 2^31 to rs.
-
   sub_d(f22, fd, f22);
   trunc_w_d(f22, f22);
   mfc1(rs, f22);
-  or_(rs, rs, t8);
+  Or(rs, rs, 1 << 31);
 
   Label done;
   Branch(&done);
@@ -948,16 +867,30 @@ void MacroAssembler::BranchF(Label* target,
 
 void MacroAssembler::Move(FPURegister dst, double imm) {
   ASSERT(CpuFeatures::IsEnabled(FPU));
-  uint32_t lo, hi;
-  DoubleAsTwoUInt32(imm, &lo, &hi);
-  // Move the low part of the double into the lower of the corresponding FPU
-  // register of FPU register pair.
-  li(at, Operand(lo));
-  mtc1(at, dst);
-  // Move the high part of the double into the higher of the corresponding FPU
-  // register of FPU register pair.
-  li(at, Operand(hi));
-  mtc1(at, FPURegister::from_code(dst.code() + 1));
+  static const DoubleRepresentation minus_zero(-0.0);
+  static const DoubleRepresentation zero(0.0);
+  DoubleRepresentation value(imm);
+  // Handle special values first.
+  // TODO(kalmard): kDoubleRegZero is only used for crankshaft. Although it
+  // (f28) is not used anywhere at the moment, what guarantees that doesn't
+  // change?
+  bool force_load = dst.is(kDoubleRegZero);
+  if (value.bits == zero.bits && !force_load) {
+    mov_d(dst, kDoubleRegZero);
+  } else if (value.bits == minus_zero.bits && !force_load) {
+    neg_d(dst, kDoubleRegZero);
+  } else {
+    uint32_t lo, hi;
+    DoubleAsTwoUInt32(imm, &lo, &hi);
+    // Move the low part of the double into the lower of the corresponding FPU
+    // register of FPU register pair.
+    li(at, Operand(lo));
+    mtc1(at, dst);
+    // Move the high part of the double into the higher of the corresponding FPU
+    // register of FPU register pair.
+    li(at, Operand(hi));
+    mtc1(at, FPURegister::from_code(dst.code() + 1));
+  }
 }
 
 
@@ -1995,6 +1928,216 @@ void MacroAssembler::BranchAndLinkShort(Label* L, Condition cond, Register rs,
 }
 
 
+void MacroAssembler::Jump(Register target,
+                          Condition cond,
+                          Register rs,
+                          const Operand& rt,
+                          BranchDelaySlot bd) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
+  if (cond == cc_always) {
+    jr(target);
+  } else {
+    BRANCH_ARGS_CHECK(cond, rs, rt);
+    Branch(2, NegateCondition(cond), rs, rt);
+    jr(target);
+  }
+  // Emit a nop in the branch delay slot if required.
+  if (bd == PROTECT)
+    nop();
+}
+
+
+void MacroAssembler::Jump(intptr_t target,
+                          RelocInfo::Mode rmode,
+                          Condition cond,
+                          Register rs,
+                          const Operand& rt,
+                          BranchDelaySlot bd) {
+  li(t9, Operand(target, rmode));
+  Jump(t9, cond, rs, rt, bd);
+}
+
+
+void MacroAssembler::Jump(Address target,
+                          RelocInfo::Mode rmode,
+                          Condition cond,
+                          Register rs,
+                          const Operand& rt,
+                          BranchDelaySlot bd) {
+  ASSERT(!RelocInfo::IsCodeTarget(rmode));
+  Jump(reinterpret_cast<intptr_t>(target), rmode, cond, rs, rt, bd);
+}
+
+
+void MacroAssembler::Jump(Handle<Code> code,
+                          RelocInfo::Mode rmode,
+                          Condition cond,
+                          Register rs,
+                          const Operand& rt,
+                          BranchDelaySlot bd) {
+  ASSERT(RelocInfo::IsCodeTarget(rmode));
+  Jump(reinterpret_cast<intptr_t>(code.location()), rmode, cond, rs, rt, bd);
+}
+
+
+int MacroAssembler::CallSize(Register target,
+                             Condition cond,
+                             Register rs,
+                             const Operand& rt,
+                             BranchDelaySlot bd) {
+  int size = 0;
+
+  if (cond == cc_always) {
+    size += 1;
+  } else {
+    size += 3;
+  }
+
+  if (bd == PROTECT)
+    size += 1;
+
+  return size * kInstrSize;
+}
+
+
+// Note: To call gcc-compiled C code on mips, you must call thru t9.
+void MacroAssembler::Call(Register target,
+                          Condition cond,
+                          Register rs,
+                          const Operand& rt,
+                          BranchDelaySlot bd) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
+  Label start;
+  bind(&start);
+  if (cond == cc_always) {
+    jalr(target);
+  } else {
+    BRANCH_ARGS_CHECK(cond, rs, rt);
+    Branch(2, NegateCondition(cond), rs, rt);
+    jalr(target);
+  }
+  // Emit a nop in the branch delay slot if required.
+  if (bd == PROTECT)
+    nop();
+
+  ASSERT_EQ(CallSize(target, cond, rs, rt, bd),
+            SizeOfCodeGeneratedSince(&start));
+}
+
+
+int MacroAssembler::CallSize(Address target,
+                             RelocInfo::Mode rmode,
+                             Condition cond,
+                             Register rs,
+                             const Operand& rt,
+                             BranchDelaySlot bd) {
+  int size = 0;
+  int32_t target_int = reinterpret_cast<int32_t>(target);
+  if (!MustUseReg(rmode) && is_uint28(target_int)) {
+    if (cond == cc_always) {
+      size += 1;
+    } else {
+      size += 3;
+    }
+  } else {  // MustUseReg
+    size += 2;
+    if (cond == cc_always) {
+      size += 1;
+    } else {
+      size += 3;
+    }
+  }
+
+  if (bd == PROTECT)
+    size += 1;
+
+  return size * kInstrSize;
+}
+
+
+void MacroAssembler::Call(Address target,
+                          RelocInfo::Mode rmode,
+                          Condition cond,
+                          Register rs,
+                          const Operand& rt,
+                          BranchDelaySlot bd) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
+  Label start;
+  bind(&start);
+  int32_t target_int = reinterpret_cast<int32_t>(target);
+
+  if (!MustUseReg(rmode)  && is_uint28(target_int)) {
+    if (cond == cc_always) {
+      jal(target_int);
+    } else {
+      BRANCH_ARGS_CHECK(cond, rs, rt);
+      Branch(2, NegateCondition(cond), rs, rt);
+      jal(target_int);  // Will generate only one instruction.
+    }
+  } else {  // MustUseReg
+    // Must record previous source positions before the
+    // li() generates a new code target.
+    positions_recorder()->WriteRecordedPositions();
+    li(t9, Operand(target_int, rmode), true);
+    if (cond == cc_always) {
+      jalr(t9);
+    } else {
+      BRANCH_ARGS_CHECK(cond, rs, rt);
+      Branch(2, NegateCondition(cond), rs, rt);
+      jalr(t9);  // Will generate only one instruction.
+    }
+  }
+
+  if (bd == PROTECT)
+    nop();
+
+  ASSERT_EQ(CallSize(target, rmode, cond, rs, rt, bd),
+            SizeOfCodeGeneratedSince(&start));
+}
+
+
+int MacroAssembler::CallSize(Handle<Code> code,
+                             RelocInfo::Mode rmode,
+                             unsigned ast_id,
+                             Condition cond,
+                             Register rs,
+                             const Operand& rt,
+                             BranchDelaySlot bd) {
+  return CallSize(reinterpret_cast<Address>(code.location()),
+      rmode, cond, rs, rt, bd);
+}
+
+
+void MacroAssembler::Call(Handle<Code> code,
+                          RelocInfo::Mode rmode,
+                          unsigned ast_id,
+                          Condition cond,
+                          Register rs,
+                          const Operand& rt,
+                          BranchDelaySlot bd) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
+  Label start;
+  bind(&start);
+  ASSERT(RelocInfo::IsCodeTarget(rmode));
+  if (rmode == RelocInfo::CODE_TARGET && ast_id != kNoASTId) {
+    ASSERT(ast_id_for_reloc_info_ == kNoASTId);
+    ast_id_for_reloc_info_ = ast_id;
+    rmode = RelocInfo::CODE_TARGET_WITH_ID;
+  }
+  Call(reinterpret_cast<Address>(code.location()), rmode, cond, rs, rt, bd);
+  ASSERT_EQ(CallSize(code, rmode, ast_id, cond, rs, rt),
+            SizeOfCodeGeneratedSince(&start));
+}
+
+
+void MacroAssembler::Ret(Condition cond,
+                         Register rs,
+                         const Operand& rt,
+                         BranchDelaySlot bd) {
+  Jump(ra, cond, rs, rt, bd);
+}
+
+
 void MacroAssembler::J(Label* L, BranchDelaySlot bdslot) {
   BlockTrampolinePoolScope block_trampoline_pool(this);
 
@@ -2053,163 +2196,6 @@ void MacroAssembler::Jalr(Label* L, BranchDelaySlot bdslot) {
 }
 
 
-void MacroAssembler::Jump(const Operand& target, BranchDelaySlot bdslot) {
-  BlockTrampolinePoolScope block_trampoline_pool(this);
-  if (target.is_reg()) {
-      jr(target.rm());
-  } else {
-    if (!MustUseReg(target.rmode_)) {
-        j(target.imm32_);
-    } else {
-      li(t9, target);
-      jr(t9);
-    }
-  }
-  // Emit a nop in the branch delay slot if required.
-  if (bdslot == PROTECT)
-    nop();
-}
-
-
-void MacroAssembler::Jump(const Operand& target,
-                          Condition cond, Register rs, const Operand& rt,
-                          BranchDelaySlot bdslot) {
-  BlockTrampolinePoolScope block_trampoline_pool(this);
-  BRANCH_ARGS_CHECK(cond, rs, rt);
-  if (target.is_reg()) {
-    if (cond == cc_always) {
-      jr(target.rm());
-    } else {
-      Branch(2, NegateCondition(cond), rs, rt);
-      jr(target.rm());
-    }
-  } else {  // Not register target.
-    if (!MustUseReg(target.rmode_)) {
-      if (cond == cc_always) {
-        j(target.imm32_);
-      } else {
-        Branch(2, NegateCondition(cond), rs, rt);
-        j(target.imm32_);  // Will generate only one instruction.
-      }
-    } else {  // MustUseReg(target).
-      li(t9, target);
-      if (cond == cc_always) {
-        jr(t9);
-      } else {
-        Branch(2, NegateCondition(cond), rs, rt);
-        jr(t9);  // Will generate only one instruction.
-      }
-    }
-  }
-  // Emit a nop in the branch delay slot if required.
-  if (bdslot == PROTECT)
-    nop();
-}
-
-
-int MacroAssembler::CallSize(Handle<Code> code, RelocInfo::Mode rmode) {
-  return 4 * kInstrSize;
-}
-
-
-int MacroAssembler::CallSize(Register reg) {
-  return 2 * kInstrSize;
-}
-
-
-// Note: To call gcc-compiled C code on mips, you must call thru t9.
-void MacroAssembler::Call(const Operand& target, BranchDelaySlot bdslot) {
-  BlockTrampolinePoolScope block_trampoline_pool(this);
-  if (target.is_reg()) {
-      jalr(target.rm());
-  } else {  // !target.is_reg().
-    // Must record previous source positions before the
-    // li() generates a new code target.
-    positions_recorder()->WriteRecordedPositions();
-    li(t9, target);
-    jalr(t9);
-  }
-  // Emit a nop in the branch delay slot if required.
-  if (bdslot == PROTECT)
-    nop();
-}
-
-
-// Note: To call gcc-compiled C code on mips, you must call thru t9.
-void MacroAssembler::Call(const Operand& target,
-                          Condition cond, Register rs, const Operand& rt,
-                          BranchDelaySlot bdslot) {
-  BlockTrampolinePoolScope block_trampoline_pool(this);
-  BRANCH_ARGS_CHECK(cond, rs, rt);
-  if (target.is_reg()) {
-    if (cond == cc_always) {
-      jalr(target.rm());
-    } else {
-      Branch(2, NegateCondition(cond), rs, rt);
-      jalr(target.rm());
-    }
-  } else {  // !target.is_reg().
-    if (!MustUseReg(target.rmode_)) {
-      if (cond == cc_always) {
-        jal(target.imm32_);
-      } else {
-        Branch(2, NegateCondition(cond), rs, rt);
-        jal(target.imm32_);  // Will generate only one instruction.
-      }
-    } else {  // MustUseReg(target)
-      li(t9, target);
-      if (cond == cc_always) {
-        jalr(t9);
-      } else {
-        Branch(2, NegateCondition(cond), rs, rt);
-        jalr(t9);  // Will generate only one instruction.
-      }
-    }
-  }
-  // Emit a nop in the branch delay slot if required.
-  if (bdslot == PROTECT)
-    nop();
-}
-
-
-void MacroAssembler::CallWithAstId(Handle<Code> code,
-                                   RelocInfo::Mode rmode,
-                                   unsigned ast_id,
-                                   Condition cond,
-                                   Register r1,
-                                   const Operand& r2) {
-  ASSERT(rmode == RelocInfo::CODE_TARGET_WITH_ID);
-  ASSERT(ast_id != kNoASTId);
-  ASSERT(ast_id_for_reloc_info_ == kNoASTId);
-  ast_id_for_reloc_info_ = ast_id;
-  Call(reinterpret_cast<intptr_t>(code.location()), rmode, cond, r1, r2);
-}
-
-
-void MacroAssembler::Drop(int count,
-                          Condition cond,
-                          Register reg,
-                          const Operand& op) {
-  if (count <= 0) {
-    return;
-  }
-
-  Label skip;
-
-  if (cond != al) {
-    Branch(&skip, NegateCondition(cond), reg, op);
-  }
-
-  if (count > 0) {
-    addiu(sp, sp, count * kPointerSize);
-  }
-
-  if (cond != al) {
-    bind(&skip);
-  }
-}
-
-
 void MacroAssembler::DropAndRet(int drop,
                                 Condition cond,
                                 Register r1,
@@ -2229,6 +2215,29 @@ void MacroAssembler::DropAndRet(int drop,
     bind(&skip);
   }
 }
+
+
+void MacroAssembler::Drop(int count,
+                          Condition cond,
+                          Register reg,
+                          const Operand& op) {
+  if (count <= 0) {
+    return;
+  }
+
+  Label skip;
+
+  if (cond != al) {
+     Branch(&skip, NegateCondition(cond), reg, op);
+  }
+
+  addiu(sp, sp, count * kPointerSize);
+
+  if (cond != al) {
+    bind(&skip);
+  }
+}
+
 
 
 void MacroAssembler::Swap(Register reg1,
@@ -2892,7 +2901,7 @@ void MacroAssembler::CheckFastElements(Register map,
                                        Register scratch,
                                        Label* fail) {
   STATIC_ASSERT(JSObject::FAST_ELEMENTS == 0);
-  lbu(scratch, FieldMemOperand(map, Map::kInstanceTypeOffset));
+  lbu(scratch, FieldMemOperand(map, Map::kBitField2Offset));
   Branch(fail, hi, scratch, Operand(Map::kMaximumBitField2FastElementValue));
 }
 
@@ -3067,9 +3076,9 @@ void MacroAssembler::InvokePrologue(const ParameterCount& expected,
     Handle<Code> adaptor =
         isolate()->builtins()->ArgumentsAdaptorTrampoline();
     if (flag == CALL_FUNCTION) {
-      call_wrapper.BeforeCall(CallSize(adaptor, RelocInfo::CODE_TARGET));
+      call_wrapper.BeforeCall(CallSize(adaptor));
       SetCallKind(t1, call_kind);
-      Call(adaptor, RelocInfo::CODE_TARGET);
+      Call(adaptor);
       call_wrapper.AfterCall();
       jmp(done);
     } else {
@@ -3272,7 +3281,7 @@ void MacroAssembler::GetObjectType(Register object,
 void MacroAssembler::CallStub(CodeStub* stub, Condition cond,
                               Register r1, const Operand& r2) {
   ASSERT(allow_stub_calls());  // Stub calls are not allowed in some stubs.
-  Call(stub->GetCode(), RelocInfo::CODE_TARGET, cond, r1, r2);
+  Call(stub->GetCode(), RelocInfo::CODE_TARGET, kNoASTId, cond, r1, r2);
 }
 
 
@@ -3283,7 +3292,8 @@ MaybeObject* MacroAssembler::TryCallStub(CodeStub* stub, Condition cond,
   { MaybeObject* maybe_result = stub->TryGetCode();
     if (!maybe_result->ToObject(&result)) return maybe_result;
   }
-  Call(Handle<Code>(Code::cast(result)), RelocInfo::CODE_TARGET, cond, r1, r2);
+  Call(Handle<Code>(Code::cast(result)), RelocInfo::CODE_TARGET,
+      kNoASTId, cond, r1, r2);
   return result;
 }
 
@@ -3810,17 +3820,6 @@ void MacroAssembler::LoadContext(Register dst, int context_chain_length) {
     // destination register in case we store into it (the write barrier
     // cannot be allowed to destroy the context in esi).
     Move(dst, cp);
-  }
-
-  // We should not have found a 'with' context by walking the context chain
-  // (i.e., the static scope chain and runtime context chain do not agree).
-  // A variable occurring in such a scope should have slot type LOOKUP and
-  // not CONTEXT.
-  if (emit_debug_code()) {
-    lw(t9, MemOperand(dst, Context::SlotOffset(Context::FCONTEXT_INDEX)));
-    Check(eq, "Yo dawg, I heard you liked function contexts "
-              "so I put function contexts in all your contexts",
-               dst, Operand(t9));
   }
 }
 

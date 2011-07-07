@@ -251,29 +251,34 @@ Handle<Context> Factory::NewGlobalContext() {
 
 
 Handle<Context> Factory::NewFunctionContext(int length,
-                                            Handle<JSFunction> closure) {
+                                            Handle<JSFunction> function) {
   CALL_HEAP_FUNCTION(
       isolate(),
-      isolate()->heap()->AllocateFunctionContext(length, *closure),
+      isolate()->heap()->AllocateFunctionContext(length, *function),
       Context);
 }
 
 
-Handle<Context> Factory::NewCatchContext(Handle<Context> previous,
+Handle<Context> Factory::NewCatchContext(Handle<JSFunction> function,
+                                         Handle<Context> previous,
                                          Handle<String> name,
                                          Handle<Object> thrown_object) {
   CALL_HEAP_FUNCTION(
       isolate(),
-      isolate()->heap()->AllocateCatchContext(*previous, *name, *thrown_object),
+      isolate()->heap()->AllocateCatchContext(*function,
+                                              *previous,
+                                              *name,
+                                              *thrown_object),
       Context);
 }
 
 
-Handle<Context> Factory::NewWithContext(Handle<Context> previous,
+Handle<Context> Factory::NewWithContext(Handle<JSFunction> function,
+                                        Handle<Context> previous,
                                         Handle<JSObject> extension) {
   CALL_HEAP_FUNCTION(
       isolate(),
-      isolate()->heap()->AllocateWithContext(*previous, *extension),
+      isolate()->heap()->AllocateWithContext(*function, *previous, *extension),
       Context);
 }
 
@@ -1216,12 +1221,14 @@ void Factory::SetRegExpIrregexpData(Handle<JSRegExp> regexp,
                                     JSRegExp::Flags flags,
                                     int capture_count) {
   Handle<FixedArray> store = NewFixedArray(JSRegExp::kIrregexpDataSize);
-
+  Smi* uninitialized = Smi::FromInt(JSRegExp::kUninitializedValue);
   store->set(JSRegExp::kTagIndex, Smi::FromInt(type));
   store->set(JSRegExp::kSourceIndex, *source);
   store->set(JSRegExp::kFlagsIndex, Smi::FromInt(flags.value()));
-  store->set(JSRegExp::kIrregexpASCIICodeIndex, HEAP->the_hole_value());
-  store->set(JSRegExp::kIrregexpUC16CodeIndex, HEAP->the_hole_value());
+  store->set(JSRegExp::kIrregexpASCIICodeIndex, uninitialized);
+  store->set(JSRegExp::kIrregexpUC16CodeIndex, uninitialized);
+  store->set(JSRegExp::kIrregexpASCIICodeSavedIndex, uninitialized);
+  store->set(JSRegExp::kIrregexpUC16CodeSavedIndex, uninitialized);
   store->set(JSRegExp::kIrregexpMaxRegisterCountIndex, Smi::FromInt(0));
   store->set(JSRegExp::kIrregexpCaptureCountIndex,
              Smi::FromInt(capture_count));

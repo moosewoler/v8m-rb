@@ -669,7 +669,7 @@ void HCallRuntime::PrintDataTo(StringStream* stream) {
 }
 
 
-void HClassOfTest::PrintDataTo(StringStream* stream) {
+void HClassOfTestAndBranch::PrintDataTo(StringStream* stream) {
   stream->Add("class_of_test(");
   value()->PrintNameTo(stream);
   stream->Add(", \"%o\")", *class_name());
@@ -747,7 +747,7 @@ void HUnaryOperation::PrintDataTo(StringStream* stream) {
 }
 
 
-void HHasInstanceType::PrintDataTo(StringStream* stream) {
+void HHasInstanceTypeAndBranch::PrintDataTo(StringStream* stream) {
   value()->PrintNameTo(stream);
   switch (from_) {
     case FIRST_JS_RECEIVER_TYPE:
@@ -768,7 +768,7 @@ void HHasInstanceType::PrintDataTo(StringStream* stream) {
 }
 
 
-void HTypeofIs::PrintDataTo(StringStream* stream) {
+void HTypeofIsAndBranch::PrintDataTo(StringStream* stream) {
   value()->PrintNameTo(stream);
   stream->Add(" == ");
   stream->Add(type_literal_->ToAsciiVector());
@@ -1231,25 +1231,28 @@ Range* HShl::InferRange() {
 
 
 
-void HCompare::PrintDataTo(StringStream* stream) {
+void HCompareGeneric::PrintDataTo(StringStream* stream) {
   stream->Add(Token::Name(token()));
   stream->Add(" ");
   HBinaryOperation::PrintDataTo(stream);
 }
 
 
-void HCompare::SetInputRepresentation(Representation r) {
+void HCompareIDAndBranch::PrintDataTo(StringStream* stream) {
+  stream->Add(Token::Name(token()));
+  stream->Add(" ");
+  left()->PrintNameTo(stream);
+  stream->Add(" ");
+  right()->PrintNameTo(stream);
+}
+
+
+void HCompareIDAndBranch::SetInputRepresentation(Representation r) {
   input_representation_ = r;
-  if (r.IsTagged()) {
-    SetAllSideEffects();
-    ClearFlag(kUseGVN);
-  } else if (r.IsDouble()) {
+  if (r.IsDouble()) {
     SetFlag(kDeoptimizeOnUndefined);
-    ClearAllSideEffects();
-    SetFlag(kUseGVN);
   } else {
-    ClearAllSideEffects();
-    SetFlag(kUseGVN);
+    ASSERT(r.IsInteger32());
   }
 }
 
@@ -1265,13 +1268,15 @@ void HLoadNamedField::PrintDataTo(StringStream* stream) {
 }
 
 
-HLoadNamedFieldPolymorphic::HLoadNamedFieldPolymorphic(HValue* object,
+HLoadNamedFieldPolymorphic::HLoadNamedFieldPolymorphic(HValue* context,
+                                                       HValue* object,
                                                        ZoneMapList* types,
                                                        Handle<String> name)
-    : HUnaryOperation(object),
-      types_(Min(types->length(), kMaxLoadPolymorphism)),
+    : types_(Min(types->length(), kMaxLoadPolymorphism)),
       name_(name),
       need_generic_(false) {
+  SetOperandAt(0, context);
+  SetOperandAt(1, object);
   set_representation(Representation::Tagged());
   SetFlag(kDependsOnMaps);
   for (int i = 0;
@@ -1566,17 +1571,7 @@ HType HConstant::CalculateInferredType() {
 }
 
 
-HType HCompare::CalculateInferredType() {
-  return HType::Boolean();
-}
-
-
-HType HCompareObjectEq::CalculateInferredType() {
-  return HType::Boolean();
-}
-
-
-HType HUnaryPredicate::CalculateInferredType() {
+HType HCompareGeneric::CalculateInferredType() {
   return HType::Boolean();
 }
 

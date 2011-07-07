@@ -167,13 +167,14 @@ struct SwVfpRegister {
 
 // Double word VFP register.
 struct DwVfpRegister {
-  // d0 has been excluded from allocation. This is following ia32
-  // where xmm0 is excluded. This should be revisited.
-  // Currently d0 is used as a scratch register.
-  // d1 has also been excluded from allocation to be used as a scratch
-  // register as well.
   static const int kNumRegisters = 16;
-  static const int kNumAllocatableRegisters = 15;
+  // A few double registers are reserved: one as a scratch register and one to
+  // hold 0.0, that does not fit in the immediate field of vmov instructions.
+  //  d14: 0.0
+  //  d15: scratch register.
+  static const int kNumReservedRegisters = 2;
+  static const int kNumAllocatableRegisters = kNumRegisters -
+      kNumReservedRegisters;
 
   static int ToAllocationIndex(DwVfpRegister reg) {
     ASSERT(reg.code() != 0);
@@ -188,6 +189,7 @@ struct DwVfpRegister {
   static const char* AllocationIndexToString(int index) {
     ASSERT(index >= 0 && index < kNumAllocatableRegisters);
     const char* const names[] = {
+      "d0",
       "d1",
       "d2",
       "d3",
@@ -200,9 +202,7 @@ struct DwVfpRegister {
       "d10",
       "d11",
       "d12",
-      "d13",
-      "d14",
-      "d15"
+      "d13"
     };
     return names[index];
   }
@@ -306,6 +306,7 @@ const DwVfpRegister d15 = { 15 };
 // Aliases for double registers.
 const DwVfpRegister kFirstCalleeSavedDoubleReg = d8;
 const DwVfpRegister kLastCalleeSavedDoubleReg = d15;
+const DwVfpRegister kDoubleRegZero = d14;
 
 
 // Coprocessor register
@@ -377,7 +378,6 @@ class Operand BASE_EMBEDDED {
   INLINE(explicit Operand(int32_t immediate,
          RelocInfo::Mode rmode = RelocInfo::NONE));
   INLINE(explicit Operand(const ExternalReference& f));
-  INLINE(explicit Operand(const char* s));
   explicit Operand(Handle<Object> handle);
   INLINE(explicit Operand(Smi* value));
 
@@ -1166,8 +1166,13 @@ class Assembler : public AssemblerBase {
   void jmp(Label* L) { b(L, al); }
 
   // Check the code size generated from label to here.
-  int InstructionsGeneratedSince(Label* l) {
-    return (pc_offset() - l->pos()) / kInstrSize;
+  int SizeOfCodeGeneratedSince(Label* label) {
+    return pc_offset() - label->pos();
+  }
+
+  // Check the number of instructions generated from label to here.
+  int InstructionsGeneratedSince(Label* label) {
+    return SizeOfCodeGeneratedSince(label) / kInstrSize;
   }
 
   // Check whether an immediate fits an addressing mode 1 instruction.

@@ -293,8 +293,6 @@ class LCodeGen BASE_EMBEDDED {
                         bool deoptimize_on_undefined,
                         LInstruction* instr);
 
-  void TrueFalseRoot(Register result, Label* is_true);
-
   // Emits optimized code for typeof x == "y".  Modifies input register.
   // Returns the condition on which a final split to
   // true and false label should be made, to optimize fallthrough.
@@ -307,10 +305,10 @@ class LCodeGen BASE_EMBEDDED {
   // Returns the instance type in reg temp2 on which a final split to
   // true and false label should be made, to optimize fallthrough.
   void EmitIsObject(Register input,
-                         Register temp1,
-                         Register temp2,
-                         Label* is_not_object,
-                         Label* is_object);
+                    Register temp1,
+                    Register temp2,
+                    Label* is_not_object,
+                    Label* is_object);
 
   // Emits optimized code for %_IsConstructCall().
   // Caller should branch on equal condition.

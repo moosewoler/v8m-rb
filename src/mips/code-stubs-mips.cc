@@ -166,7 +166,6 @@ void FastNewContextStub::Generate(MacroAssembler* masm) {
   // Setup the fixed slots.
   __ li(a1, Operand(Smi::FromInt(0)));
   __ sw(a3, MemOperand(v0, Context::SlotOffset(Context::CLOSURE_INDEX)));
-  __ sw(v0, MemOperand(v0, Context::SlotOffset(Context::FCONTEXT_INDEX)));
   __ sw(cp, MemOperand(v0, Context::SlotOffset(Context::PREVIOUS_INDEX)));
   __ sw(a1, MemOperand(v0, Context::SlotOffset(Context::EXTENSION_INDEX)));
 
@@ -397,11 +396,11 @@ void FloatingPointHelper::LoadSmis(MacroAssembler* masm,
     __ mov(scratch1, a0);
     ConvertToDoubleStub stub1(a3, a2, scratch1, scratch2);
     __ push(ra);
-    __ Call(stub1.GetCode(), RelocInfo::CODE_TARGET);
+    __ Call(stub1.GetCode());
     // Write Smi from a1 to a1 and a0 in double format.
     __ mov(scratch1, a1);
     ConvertToDoubleStub stub2(a1, a0, scratch1, scratch2);
-    __ Call(stub2.GetCode(), RelocInfo::CODE_TARGET);
+    __ Call(stub2.GetCode());
     __ pop(ra);
   }
 }
@@ -483,7 +482,7 @@ void FloatingPointHelper::LoadNumber(MacroAssembler* masm,
     __ mov(scratch1, object);
     ConvertToDoubleStub stub(dst2, dst1, scratch1, scratch2);
     __ push(ra);
-    __ Call(stub.GetCode(), RelocInfo::CODE_TARGET);
+    __ Call(stub.GetCode());
     __ pop(ra);
   }
 
@@ -1108,7 +1107,7 @@ static void EmitSmiNonsmiComparison(MacroAssembler* masm,
     __ mov(t6, rhs);
     ConvertToDoubleStub stub1(a1, a0, t6, t5);
     __ push(ra);
-    __ Call(stub1.GetCode(), RelocInfo::CODE_TARGET);
+    __ Call(stub1.GetCode());
 
     __ pop(ra);
   }
@@ -1143,7 +1142,7 @@ static void EmitSmiNonsmiComparison(MacroAssembler* masm,
     __ mov(t6, lhs);
     ConvertToDoubleStub stub2(a3, a2, t6, t5);
     __ push(ra);
-    __ Call(stub2.GetCode(), RelocInfo::CODE_TARGET);
+    __ Call(stub2.GetCode());
     __ pop(ra);
     // Load rhs to a double in a1, a0.
     if (rhs.is(a0)) {
@@ -1846,19 +1845,13 @@ void UnaryOpStub::Generate(MacroAssembler* masm) {
 
 void UnaryOpStub::GenerateTypeTransition(MacroAssembler* masm) {
   // Argument is in a0 and v0 at this point, so we can overwrite a0.
-  // Push this stub's key. Although the operation and the type info are
-  // encoded into the key, the encoding is opaque, so push them too.
-  __ li(a2, Operand(Smi::FromInt(MinorKey())));
-  __ li(a1, Operand(Smi::FromInt(op_)));
+  __ li(a2, Operand(Smi::FromInt(op_)));
+  __ li(a1, Operand(Smi::FromInt(mode_)));
   __ li(a0, Operand(Smi::FromInt(operand_type_)));
-
   __ Push(v0, a2, a1, a0);
 
   __ TailCallExternalReference(
-      ExternalReference(IC_Utility(IC::kUnaryOp_Patch),
-                        masm->isolate()),
-      4,
-      1);
+      ExternalReference(IC_Utility(IC::kUnaryOp_Patch), masm->isolate()), 4, 1);
 }
 
 
@@ -3729,6 +3722,13 @@ void JSEntryStub::GenerateBody(MacroAssembler* masm, bool is_construct) {
   // Save callee saved registers on the stack.
   __ MultiPush(kCalleeSaved | ra.bit());
 
+  if (CpuFeatures::IsSupported(FPU)) {
+    CpuFeatures::Scope scope(FPU);
+    // TODO(kalmard): ARM saves all FPU regs here, why don't we?
+    // Set up the reserved register for 0.0.
+    __ Move(kDoubleRegZero, 0.0);
+  }
+
   // Load argv in s0 register.
   __ lw(s0, MemOperand(sp, (kNumCalleeSaved + 1) * kPointerSize +
                            kCArgsSlotsSize));
@@ -4602,10 +4602,9 @@ void RegExpExecStub::Generate(MacroAssembler* masm) {
   __ movz(t9, t0, a0);  // If UC16 (a0 is 0), replace t9 w/kDataUC16CodeOffset.
 
   // Check that the irregexp code has been generated for the actual string
-  // encoding. If it has, the field contains a code object otherwise it
-  // contains the hole.
-  __ GetObjectType(t9, a0, a0);
-  __ Branch(&runtime, ne, a0, Operand(CODE_TYPE));
+  // encoding. If it has, the field contains a code object otherwise it contains
+  // a smi (code flushing support).
+  __ JumpIfSmi(t9, &runtime);
 
   // a3: encoding of subject string (1 if ASCII, 0 if two_byte);
   // t9: code

@@ -35,7 +35,7 @@ ARM_TO_MIPS_IMM = {
   'add' : ('Addu', 'addu', 'addiu'),
   'sub' : ('Subu', 'subu', 'addiu'),
   'mov' : ('li'  , 'mov',  'li'   ),
-  'not_': ('Not?', 'not_', 'noti?'),  # only need register case
+  'mvn' : ('Not?', 'not_', 'noti?'),  # only need register case
   }
 
 SHIFT_OPS = {'lsl': 'sll', 'lsr': 'srl', 'asr': 'sra'}
@@ -51,7 +51,7 @@ UNSIGNED_COMPARES = {'lo': 'lt', 'ls': 'le', 'hs': 'ge', 'hi': 'gt'}
 
 COMMON_REGNAMES = set(['at', 'fp', 'sp', 'cp', 'a0', 'a1', 'a2', 'a3',
                        'zero_reg',
-                       'left', 'right', 'reg',
+                       'left', 'right', 'input', 'reg',
                        'left_reg', 'right_reg', 'input_reg',])
 
 REG_RENAMES = {
@@ -150,6 +150,8 @@ def reg_operand(arg):
     return ''
   if arg.startswith('ToOperand(') or arg.endswith('_operand'):
     return ''
+  if arg.endswith('o'):  # vars of type Operand
+    return ''
   return arg
 
 def rename_regs(line):
@@ -232,7 +234,7 @@ def process_line(fi, fo, line1):
       mips_op = 'ldc1' if op1 == 'vldr' else 'sdc1'
       line1 = ('%s__ %s(%s, %s);%s\n'
                % (indent, mips_op, reg1, operand2, comment))
-    elif op1 == 'vmov':
+    elif op1 == 'vmov' or op1 == 'Vmov':
       indent, reg1, reg2, comment = iparts1
       if reg1.endswith('.high()') or reg1.endswith('.low()') or likely_int_reg(reg2):
         mips_op = 'mtc1'

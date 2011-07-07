@@ -424,6 +424,9 @@ class StaticMarkingVisitor : public StaticVisitorBase {
     table_.Register(kVisitJSFunction,
                     &VisitJSFunctionAndFlushCode);
 
+    table_.Register(kVisitJSRegExp,
+                    &VisitRegExpAndFlushCode);
+
     table_.Register(kVisitPropertyCell,
                     &FixedBodyVisitor<StaticMarkingVisitor,
                                       JSGlobalPropertyCell::BodyDescriptor,
@@ -564,6 +567,8 @@ class StaticMarkingVisitor : public StaticVisitorBase {
   // flushed.
   static const int kCodeAgeThreshold = 5;
 
+  static const int kRegExpCodeThreshold = 5;
+
   inline static bool HasSourceCode(Heap* heap, SharedFunctionInfo* info) {
     Object* undefined = heap->raw_unchecked_undefined_value();
     return (info->script() != undefined) &&
@@ -700,6 +705,68 @@ class StaticMarkingVisitor : public StaticVisitorBase {
   }
 
 
+  static void UpdateRegExpCodeAgeAndFlush(Heap* heap,
+                                          JSRegExp* re,
+                                          bool is_ascii) {
+    // Make sure that the fixed array is in fact initialized on the RegExp.
+    // We could potentially trigger a GC when initializing the RegExp.
+    if (SafeMap(re->data())->instance_type() != FIXED_ARRAY_TYPE) return;
+
+    // Make sure this is a RegExp that actually contains code.
+    if (re->TypeTagUnchecked() != JSRegExp::IRREGEXP) return;
+
+    Object* code = re->DataAtUnchecked(JSRegExp::code_index(is_ascii));
+    if (!code->IsSmi() && SafeMap(code)->instance_type() == CODE_TYPE) {
+      // Save a copy that can be reinstated if we need the code again.
+      re->SetDataAtUnchecked(JSRegExp::saved_code_index(is_ascii),
+                             code,
+                             heap);
+      // Set a number in the 0-255 range to guarantee no smi overflow.
+      re->SetDataAtUnchecked(JSRegExp::code_index(is_ascii),
+                             Smi::FromInt(heap->sweep_generation() & 0xff),
+                             heap);
+    } else if (code->IsSmi()) {
+      int value = Smi::cast(code)->value();
+      // The regexp has not been compiled yet or there was a compilation error.
+      if (value == JSRegExp::kUninitializedValue ||
+          value == JSRegExp::kCompilationErrorValue) {
+        return;
+      }
+
+      // Check if we should flush now.
+      if (value == ((heap->sweep_generation() - kRegExpCodeThreshold) & 0xff)) {
+        re->SetDataAtUnchecked(JSRegExp::code_index(is_ascii),
+                               Smi::FromInt(JSRegExp::kUninitializedValue),
+                               heap);
+        re->SetDataAtUnchecked(JSRegExp::saved_code_index(is_ascii),
+                               Smi::FromInt(JSRegExp::kUninitializedValue),
+                               heap);
+      }
+    }
+  }
+
+
+  // Works by setting the current sweep_generation (as a smi) in the
+  // code object place in the data array of the RegExp and keeps a copy
+  // around that can be reinstated if we reuse the RegExp before flushing.
+  // If we did not use the code for kRegExpCodeThreshold mark sweep GCs
+  // we flush the code.
+  static void VisitRegExpAndFlushCode(Map* map, HeapObject* object) {
+    Heap* heap = map->heap();
+    MarkCompactCollector* collector = heap->mark_compact_collector();
+    if (!collector->is_code_flushing_enabled()) {
+      VisitJSRegExpFields(map, object);
+      return;
+    }
+    JSRegExp* re = reinterpret_cast<JSRegExp*>(object);
+    // Flush code or set age on both ascii and two byte code.
+    UpdateRegExpCodeAgeAndFlush(heap, re, true);
+    UpdateRegExpCodeAgeAndFlush(heap, re, false);
+    // Visit the fields of the RegExp, including the updated FixedArray.
+    VisitJSRegExpFields(map, object);
+  }
+
+
   static void VisitSharedFunctionInfoAndFlushCode(Map* map,
                                                   HeapObject* object) {
     MarkCompactCollector* collector = map->heap()->mark_compact_collector();
@@ -828,6 +895,15 @@ class StaticMarkingVisitor : public StaticVisitorBase {
                   SLOT_ADDR(object, JSFunction::kNonWeakFieldsEndOffset));
 
     // Don't visit the next function list field as it is a weak reference.
+  }
+
+  static inline void VisitJSRegExpFields(Map* map,
+                                         HeapObject* object) {
+    int last_property_offset =
+        JSRegExp::kSize + kPointerSize * map->inobject_properties();
+    VisitPointers(map->heap(),
+                  SLOT_ADDR(object, JSRegExp::kPropertiesOffset),
+                  SLOT_ADDR(object, last_property_offset));
   }
 
 
@@ -1424,6 +1500,12 @@ void MarkCompactCollector::MarkLiveObjects() {
   // reachable from the weak roots.
   ProcessExternalMarking();
 
+  // Object literal map caches reference symbols (cache keys) and maps
+  // (cache values). At this point still useful maps have already been
+  // marked. Mark the keys for the alive values before we process the
+  // symbol table.
+  ProcessMapCaches();
+
   // Prune the symbol table removing all symbols only pointed to by the
   // symbol table.  Cannot use symbol_table() here because the symbol
   // table is marked.
@@ -1449,6 +1531,57 @@ void MarkCompactCollector::MarkLiveObjects() {
 
   // Clean up dead objects from the runtime profiler.
   heap()->isolate()->runtime_profiler()->RemoveDeadSamples();
+}
+
+
+void MarkCompactCollector::ProcessMapCaches() {
+  Object* raw_context = heap()->global_contexts_list_;
+  while (raw_context != heap()->undefined_value()) {
+    Context* context = reinterpret_cast<Context*>(raw_context);
+    if (context->IsMarked()) {
+      HeapObject* raw_map_cache =
+          HeapObject::cast(context->get(Context::MAP_CACHE_INDEX));
+      // A map cache may be reachable from the stack. In this case
+      // it's already transitively marked and it's too late to clean
+      // up its parts.
+      if (!raw_map_cache->IsMarked() &&
+          raw_map_cache != heap()->undefined_value()) {
+        MapCache* map_cache = reinterpret_cast<MapCache*>(raw_map_cache);
+        int existing_elements = map_cache->NumberOfElements();
+        int used_elements = 0;
+        for (int i = MapCache::kElementsStartIndex;
+             i < map_cache->length();
+             i += MapCache::kEntrySize) {
+          Object* raw_key = map_cache->get(i);
+          if (raw_key == heap()->undefined_value() ||
+              raw_key == heap()->null_value()) continue;
+          STATIC_ASSERT(MapCache::kEntrySize == 2);
+          Object* raw_map = map_cache->get(i + 1);
+          if (raw_map->IsHeapObject() &&
+              HeapObject::cast(raw_map)->IsMarked()) {
+            ++used_elements;
+          } else {
+            // Delete useless entries with unmarked maps.
+            ASSERT(raw_map->IsMap());
+            map_cache->set_null_unchecked(heap(), i);
+            map_cache->set_null_unchecked(heap(), i + 1);
+          }
+        }
+        if (used_elements == 0) {
+          context->set(Context::MAP_CACHE_INDEX, heap()->undefined_value());
+        } else {
+          // Note: we don't actually shrink the cache here to avoid
+          // extra complexity during GC. We rely on subsequent cache
+          // usages (EnsureCapacity) to do this.
+          map_cache->ElementsRemoved(existing_elements - used_elements);
+          MarkObject(map_cache);
+        }
+      }
+    }
+    // Move to next element in the list.
+    raw_context = context->get(Context::NEXT_CONTEXT_LINK);
+  }
+  ProcessMarkingStack();
 }
 
 

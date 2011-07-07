@@ -165,7 +165,6 @@ void FastNewContextStub::Generate(MacroAssembler* masm) {
   // Setup the fixed slots.
   __ mov(r1, Operand(Smi::FromInt(0)));
   __ str(r3, MemOperand(r0, Context::SlotOffset(Context::CLOSURE_INDEX)));
-  __ str(r0, MemOperand(r0, Context::SlotOffset(Context::FCONTEXT_INDEX)));
   __ str(cp, MemOperand(r0, Context::SlotOffset(Context::PREVIOUS_INDEX)));
   __ str(r1, MemOperand(r0, Context::SlotOffset(Context::EXTENSION_INDEX)));
 
@@ -393,11 +392,11 @@ void FloatingPointHelper::LoadSmis(MacroAssembler* masm,
     __ mov(scratch1, Operand(r0));
     ConvertToDoubleStub stub1(r3, r2, scratch1, scratch2);
     __ push(lr);
-    __ Call(stub1.GetCode(), RelocInfo::CODE_TARGET);
+    __ Call(stub1.GetCode());
     // Write Smi from r1 to r1 and r0 in double format.
     __ mov(scratch1, Operand(r1));
     ConvertToDoubleStub stub2(r1, r0, scratch1, scratch2);
-    __ Call(stub2.GetCode(), RelocInfo::CODE_TARGET);
+    __ Call(stub2.GetCode());
     __ pop(lr);
   }
 }
@@ -474,7 +473,7 @@ void FloatingPointHelper::LoadNumber(MacroAssembler* masm,
     __ mov(scratch1, Operand(object));
     ConvertToDoubleStub stub(dst2, dst1, scratch1, scratch2);
     __ push(lr);
-    __ Call(stub.GetCode(), RelocInfo::CODE_TARGET);
+    __ Call(stub.GetCode());
     __ pop(lr);
   }
 
@@ -1059,7 +1058,7 @@ static void EmitSmiNonsmiComparison(MacroAssembler* masm,
     // Convert lhs to a double in r2, r3.
     __ mov(r7, Operand(lhs));
     ConvertToDoubleStub stub1(r3, r2, r7, r6);
-    __ Call(stub1.GetCode(), RelocInfo::CODE_TARGET);
+    __ Call(stub1.GetCode());
     // Load rhs to a double in r0, r1.
     __ Ldrd(r0, r1, FieldMemOperand(rhs, HeapNumber::kValueOffset));
     __ pop(lr);
@@ -1101,7 +1100,7 @@ static void EmitSmiNonsmiComparison(MacroAssembler* masm,
     // Convert rhs to a double in r0, r1.
     __ mov(r7, Operand(rhs));
     ConvertToDoubleStub stub2(r1, r0, r7, r6);
-    __ Call(stub2.GetCode(), RelocInfo::CODE_TARGET);
+    __ Call(stub2.GetCode());
     __ pop(lr);
   }
   // Fall through to both_loaded_as_doubles.
@@ -1732,22 +1731,14 @@ void UnaryOpStub::Generate(MacroAssembler* masm) {
 
 
 void UnaryOpStub::GenerateTypeTransition(MacroAssembler* masm) {
-  // Prepare to push argument.
-  __ mov(r3, Operand(r0));
-
-  // Push this stub's key. Although the operation and the type info are
-  // encoded into the key, the encoding is opaque, so push them too.
-  __ mov(r2, Operand(Smi::FromInt(MinorKey())));
-  __ mov(r1, Operand(Smi::FromInt(op_)));
+  __ mov(r3, Operand(r0));  // the operand
+  __ mov(r2, Operand(Smi::FromInt(op_)));
+  __ mov(r1, Operand(Smi::FromInt(mode_)));
   __ mov(r0, Operand(Smi::FromInt(operand_type_)));
-
   __ Push(r3, r2, r1, r0);
 
   __ TailCallExternalReference(
-      ExternalReference(IC_Utility(IC::kUnaryOp_Patch),
-                        masm->isolate()),
-      4,
-      1);
+      ExternalReference(IC_Utility(IC::kUnaryOp_Patch), masm->isolate()), 4, 1);
 }
 
 
@@ -3541,6 +3532,8 @@ void JSEntryStub::GenerateBody(MacroAssembler* masm, bool is_construct) {
     CpuFeatures::Scope scope(VFP3);
     // Save callee-saved vfp registers.
     __ vstm(db_w, sp, kFirstCalleeSavedDoubleReg, kLastCalleeSavedDoubleReg);
+    // Set up the reserved register for 0.0.
+    __ vmov(kDoubleRegZero, 0.0);
   }
 
   // Get address of argv, see stm above.
@@ -4420,9 +4413,8 @@ void RegExpExecStub::Generate(MacroAssembler* masm) {
 
   // Check that the irregexp code has been generated for the actual string
   // encoding. If it has, the field contains a code object otherwise it contains
-  // the hole.
-  __ CompareObjectType(r7, r0, r0, CODE_TYPE);
-  __ b(ne, &runtime);
+  // a smi (code flushing support).
+  __ JumpIfSmi(r7, &runtime);
 
   // r3: encoding of subject string (1 if ASCII, 0 if two_byte);
   // r7: code

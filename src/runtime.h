@@ -298,8 +298,8 @@ namespace internal {
   \
   /* Contexts */ \
   F(NewFunctionContext, 1, 1) \
-  F(PushWithContext, 1, 1) \
-  F(PushCatchContext, 2, 1) \
+  F(PushWithContext, 2, 1) \
+  F(PushCatchContext, 3, 1) \
   F(DeleteContextSlot, 2, 1) \
   F(LoadContextSlot, 2, 2) \
   F(LoadContextSlotNoReferenceError, 2, 2) \
@@ -334,7 +334,23 @@ namespace internal {
   F(MessageGetScript, 1, 1) \
   \
   /* Pseudo functions - handled as macros by parser */ \
-  F(IS_VAR, 1, 1)
+  F(IS_VAR, 1, 1) \
+  \
+  /* expose boolean functions from objects-inl.h */ \
+  F(HasFastElements, 1, 1) \
+  F(HasFastDoubleElements, 1, 1) \
+  F(HasDictionaryElements, 1, 1) \
+  F(HasExternalPixelElements, 1, 1) \
+  F(HasExternalArrayElements, 1, 1) \
+  F(HasExternalByteElements, 1, 1) \
+  F(HasExternalUnsignedByteElements, 1, 1) \
+  F(HasExternalShortElements, 1, 1) \
+  F(HasExternalUnsignedShortElements, 1, 1) \
+  F(HasExternalIntElements, 1, 1) \
+  F(HasExternalUnsignedIntElements, 1, 1) \
+  F(HasExternalFloatElements, 1, 1) \
+  F(HasExternalDoubleElements, 1, 1)
+
 
 #ifdef ENABLE_DEBUGGER_SUPPORT
 #define RUNTIME_FUNCTION_LIST_DEBUGGER_SUPPORT(F) \
@@ -413,8 +429,8 @@ namespace internal {
 
 #ifdef ENABLE_LOGGING_AND_PROFILING
 #define RUNTIME_FUNCTION_LIST_PROFILER_SUPPORT(F) \
-  F(ProfilerResume, 2, 1) \
-  F(ProfilerPause, 2, 1)
+  F(ProfilerResume, 0, 1) \
+  F(ProfilerPause, 0, 1)
 #else
 #define RUNTIME_FUNCTION_LIST_PROFILER_SUPPORT(F)
 #endif
@@ -470,7 +486,8 @@ namespace internal {
   F(IsRegExpEquivalent, 2, 1)                                                \
   F(HasCachedArrayIndex, 1, 1)                                               \
   F(GetCachedArrayIndex, 1, 1)                                               \
-  F(FastAsciiArrayJoin, 2, 1)
+  F(FastAsciiArrayJoin, 2, 1)                                                \
+  F(IsNativeOrStrictMode, 1, 1)
 
 
 // ----------------------------------------------------------------------------
@@ -519,12 +536,6 @@ class RuntimeState {
   StringInputBuffer* string_locale_compare_buf2() {
     return &string_locale_compare_buf2_;
   }
-  int* smi_lexicographic_compare_x_elms() {
-    return smi_lexicographic_compare_x_elms_;
-  }
-  int* smi_lexicographic_compare_y_elms() {
-    return smi_lexicographic_compare_y_elms_;
-  }
 
  private:
   RuntimeState() {}
@@ -536,8 +547,6 @@ class RuntimeState {
   StringInputBuffer string_input_buffer_compare_bufy_;
   StringInputBuffer string_locale_compare_buf1_;
   StringInputBuffer string_locale_compare_buf2_;
-  int smi_lexicographic_compare_x_elms_[10];
-  int smi_lexicographic_compare_y_elms_[10];
 
   friend class Isolate;
   friend class Runtime;

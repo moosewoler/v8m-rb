@@ -80,6 +80,7 @@ class FullCodeGenerator: public AstVisitor {
   explicit FullCodeGenerator(MacroAssembler* masm)
       : masm_(masm),
         info_(NULL),
+        scope_(NULL),
         nesting_stack_(NULL),
         loop_depth_(0),
         context_(NULL),
@@ -531,22 +532,10 @@ class FullCodeGenerator: public AstVisitor {
     return is_strict_mode() ? kStrictMode : kNonStrictMode;
   }
   FunctionLiteral* function() { return info_->function(); }
-  Scope* scope() { return info_->scope(); }
+  Scope* scope() { return scope_; }
 
   static Register result_register();
   static Register context_register();
-
-  // Helper for calling an IC stub.
-  void EmitCallIC(Handle<Code> ic,
-                  RelocInfo::Mode mode,
-                  unsigned ast_id);
-
-  // Calling an IC stub with a patch site. Passing NULL for patch_site
-  // or non NULL patch_site which is not activated indicates no inlined smi code
-  // and emits a nop after the IC call.
-  void EmitCallIC(Handle<Code> ic,
-                  JumpPatchSite* patch_site,
-                  unsigned ast_id);
 
   // Set fields in the stack frame. Offsets are the frame pointer relative
   // offsets defined in, e.g., StandardFrameConstants.
@@ -555,6 +544,10 @@ class FullCodeGenerator: public AstVisitor {
   // Load a value from the current context. Indices are defined as an enum
   // in v8::internal::Context.
   void LoadContextField(Register dst, int context_index);
+
+  // Push the function argument for the runtime functions PushWithContext
+  // and PushCatchContext.
+  void PushFunctionArgumentForContextAllocation();
 
   // AST node visit functions.
 #define DECLARE_VISIT(type) virtual void Visit##type(type* node);
@@ -754,6 +747,7 @@ class FullCodeGenerator: public AstVisitor {
 
   MacroAssembler* masm_;
   CompilationInfo* info_;
+  Scope* scope_;
   Label return_label_;
   NestedStatement* nesting_stack_;
   int loop_depth_;
