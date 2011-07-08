@@ -172,8 +172,27 @@ def rename_regs(line):
         i += mw
   return line
 
-def process_line(fi, fo, line1):
-    line1 = rename_regs(line1)
+def fold_long_lines(lines):
+  folded = ''
+  for line in lines.splitlines(True):
+    indent = 0
+    while line[indent] == ' ': indent += 1
+    i = line.find('//')
+    if len(line) > 80+1 and i > indent:
+      # remove and print comment first:
+      folded += ' '*indent + line[i:]
+      line = line[:i].rstrip() + '\n'
+    i = line.find('(')
+    if len(line) > 80+1 and i > 0:
+      # fold non-comment stmt at outer function call:
+      indent = i+1
+      fold = ',\n' + ' '*indent
+      line = line[:indent] + line[indent:].replace(', ', fold)
+    folded += line
+  return folded
+
+def process_line(fi, fo, orig_line):
+    line1 = rename_regs(orig_line)
     op1 = get_op(line1)
     iparts1 = parse_instr(line1)
     func1 = get_func(line1)
@@ -182,21 +201,22 @@ def process_line(fi, fo, line1):
       mips_op = ARM_TO_MIPS[op1]
       line1 = line1.replace(op1, mips_op, 1)
     elif op1 in ARM_TO_MIPS_IMM:
-      if False and len(iparts1) >= 4 and const_operand(iparts1[-2]):
-        # disable for now; non-macro addiu() works only for small consts
-        # use immediate-operand form of Mips instr, replace Operand(i) by i
-        mips_op = ARM_TO_MIPS_IMM[op1][2]
+      if len(iparts1) >= 4 and const_operand(iparts1[-2]):
+        # use immediate-operand form of Mips instr. 
         indent = iparts1[0]
         args = ', '.join(iparts1[1:-2])
+        # replace Operand(i) by i
         imm_val = const_operand(iparts1[-2])
         comment = iparts1[-1]
         if op1 == 'sub':  # becomes addiu -n
           if not is_name(imm_val):
             imm_val = '(%s)' % imm_val
           imm_val = '-%s' % imm_val
+          op1 = 'add'
+        # For now, use macro form to handle potentially large consts
+        mips_op = ARM_TO_MIPS_IMM[op1][0]  # use macro opname for now
         line1 = ('%s__ %s(%s, %s);%s\n'
                  % (indent, mips_op, args, imm_val, comment))
-
       elif len(iparts1) >= 4 and reg_operand(iparts1[-2]):
         # use register-operand form of Mips instr, replace Operand(reg) by reg
         mips_op = ARM_TO_MIPS_IMM[op1][1]
@@ -297,6 +317,8 @@ def process_line(fi, fo, line1):
                % (indent, label, cond, reg1, operand2, comment))
     elif line1.startswith('#include '):
       line1 = line1.replace('arm', 'mips')
+    if line1 != orig_line:
+      line1 = fold_long_lines(line1)
     fo.write(line1)
     line2 = fi.readline()
     return line2
