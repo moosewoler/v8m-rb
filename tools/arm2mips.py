@@ -58,9 +58,11 @@ REG_RENAMES = {
   'r0': 'a0', 'r1': 'a1', 'r2': 'a2', 'r3': 'a3',
   'r4': 't0', 'r5': 't1', 'r6': 't2', 'r7': 't3',  # TODO(duanes): remove??
   'ip': 'at', 'lr': 'ra',
+  'c_rval_reg': 'v0', 
   # other dedicated regs with unchanged names: fp, sp, cp
   'd0': 'f0', 'd2': 'f2',
   's0': 'f0', 's2': 'f2',
+  'transcend_rval_reg': 'f4',
   # also globally replace some typenames:
   'DwVfpRegister': 'FPURegister',
   'SwVfpRegister': 'FPURegister',  # Mips typenames don't distinguish single-width uses of FP registers

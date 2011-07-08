@@ -37,8 +37,6 @@
 
 #ifdef V8_TARGET_ARCH_MIPS
 #define MIPS_STUB
-#define c_rval_reg v0
-#define transcend_rval_reg f4
 //#define RuntimeAbort __ cvt_w_s(f0, f0)
 #define RuntimeAbort Abort("Unimplemented: %s line %d", __func__, __LINE__)
 #else
@@ -173,6 +171,7 @@ bool LCodeGen::GeneratePrologue() {
     Label ok;
     __ cmp(r5, Operand(0));
     __ b(eq, &ok);
+
     int receiver_offset = scope()->num_parameters() * kPointerSize;
     __ LoadRoot(r2, Heap::kUndefinedValueRootIndex);
     __ str(r2, MemOperand(sp, receiver_offset));
@@ -377,7 +376,7 @@ DoubleRegister LCodeGen::ToDoubleRegister(LOperand* op) const {
 }
 
 
-#if 0   // dead code
+// TODO(duanes): Following is dead code and should be removed.
 DoubleRegister LCodeGen::EmitLoadDoubleRegister(LOperand* op,
                                                 SwVfpRegister flt_scratch,
                                                 DoubleRegister dbl_scratch) {
@@ -405,7 +404,6 @@ DoubleRegister LCodeGen::EmitLoadDoubleRegister(LOperand* op,
   UNREACHABLE();
   return dbl_scratch;
 }
-#endif
 
 
 int LCodeGen::ToInteger32(LConstantOperand* op) const {
@@ -647,7 +645,7 @@ void LCodeGen::RegisterEnvironmentForDeoptimization(LEnvironment* environment) {
 }
 
 
-void LCodeGen::DeoptimizeIf(Condition cond, LEnvironment* environment,
+void LCodeGen::DeoptimizeIf(Condition cc, LEnvironment* environment,
                             Register src1, const Operand& src2) {
   RegisterEnvironmentForDeoptimization(environment);
   ASSERT(environment->HasBeenRegistered());
@@ -676,7 +674,7 @@ void LCodeGen::DeoptimizeIf(Condition cond, LEnvironment* environment,
     }
 
 #ifdef MIPS_STUB
-   __ Jump(entry, RelocInfo::RUNTIME_ENTRY, cond, src1, src2);
+   __ Jump(entry, RelocInfo::RUNTIME_ENTRY, cc, src1, src2);
 #else
     // We often have several deopts to the same entry, reuse the last
     // jump entry if this is the case.
@@ -685,13 +683,13 @@ void LCodeGen::DeoptimizeIf(Condition cond, LEnvironment* environment,
       deopt_jump_table_.Add(JumpTableEntry(entry));
     }
     __ cmp(src1, src2);
-    __ b(cond, &deopt_jump_table_.last().label);
+    __ b(cc, &deopt_jump_table_.last().label);
 #endif
   }
 }
 
 #ifndef V8_TARGET_ARCH_MIPS
-void LCodeGen::DeoptimizeIf(Condition cond, LEnvironment* environment) {
+void LCodeGen::DeoptimizeIf(Condition cc, LEnvironment* environment) {
   // Used only after EmitVFPTruncate
   RegisterEnvironmentForDeoptimization(environment);
   ASSERT(environment->HasBeenRegistered());
@@ -727,7 +725,7 @@ void LCodeGen::DeoptimizeIf(Condition cond, LEnvironment* environment) {
         (deopt_jump_table_.last().address != entry)) {
       deopt_jump_table_.Add(JumpTableEntry(entry));
     }
-    __ b(cond, &deopt_jump_table_.last().label);
+    __ b(cc, &deopt_jump_table_.last().label);
 #endif
   }
 }
@@ -1661,9 +1659,9 @@ void LCodeGen::EmitBranch(int left_block, int right_block, Condition cond) {
   } else if (left_block == next_block) {
     __ b(NegateCondition(cond), chunk_->GetAssemblyLabel(right_block));
   } else if (right_block == next_block) {
-    __ b(cond, chunk_->GetAssemblyLabel(left_block));
+    __ b(cc, chunk_->GetAssemblyLabel(left_block));
   } else {
-    __ b(cond, chunk_->GetAssemblyLabel(left_block));
+    __ b(cc, chunk_->GetAssemblyLabel(left_block));
     __ b(chunk_->GetAssemblyLabel(right_block));
   }
 }
@@ -1671,25 +1669,25 @@ void LCodeGen::EmitBranch(int left_block, int right_block, Condition cond) {
 
 
 void LCodeGen::EmitBranch(int left_block, int right_block,
-                          Condition cond, Register src1, const Operand& src2) {
+                          Condition cc, Register src1, const Operand& src2) {
   int next_block = GetNextEmittedBlock(current_block_);
   right_block = chunk_->LookupDestination(right_block);
   left_block = chunk_->LookupDestination(left_block);
 
-  if (cond == kNoCondition)
+  if (cc == kNoCondition)
     return;
   if (right_block == left_block) {
     EmitGoto(left_block);
   } else if (left_block == next_block) {
-    cond = NegateCondition(cond);
+    cc = NegateCondition(cc);
     __ cmp(src1, src2);
-    __ b(cond, chunk_->GetAssemblyLabel(right_block));
+    __ b(cc, chunk_->GetAssemblyLabel(right_block));
   } else if (right_block == next_block) {
     __ cmp(src1, src2);
-    __ b(cond, chunk_->GetAssemblyLabel(left_block));
+    __ b(cc, chunk_->GetAssemblyLabel(left_block));
   } else {
     __ cmp(src1, src2);
-    __ b(cond, chunk_->GetAssemblyLabel(left_block));
+    __ b(cc, chunk_->GetAssemblyLabel(left_block));
     __ b(chunk_->GetAssemblyLabel(right_block));
   }
 }
@@ -1818,6 +1816,16 @@ Condition LCodeGen::TokenToCondition(Token::Value op, bool is_unsigned) {
 }
 
 
+// TODO(duanes): Following method is dead code and should be removed.
+void LCodeGen::EmitCmpI(LOperand* left, LOperand* right) {
+#ifdef V8_TARGET_ARCH_MIPS
+  NotYet;  // not ever, on Mips; requires a condition code register
+#else
+  __ cmp(ToRegister(left), ToRegister(right));
+#endif
+}
+
+
 void LCodeGen::DoCmpIDAndBranch(LCmpIDAndBranch* instr) {
   LOperand* left = instr->InputAt(0);
   LOperand* right = instr->InputAt(1);
@@ -1898,11 +1906,11 @@ void LCodeGen::DoIsNullAndBranch(LIsNullAndBranch* instr) {
 }
 
 
-void LCodeGen::EmitIsObject(Register input,
-                            Register temp1,
-                            Register temp2,
-                            Label* is_not_object,
-                            Label* is_object) {
+Condition LCodeGen::EmitIsObject(Register input,
+                                 Register temp1,
+                                 Label* is_not_object,
+                                 Label* is_object) {
+  Register temp2 = scratch0();
   __ JumpIfSmi(input, is_not_object);
 
   __ LoadRoot(temp2, Heap::kNullValueRootIndex);
@@ -1924,6 +1932,7 @@ void LCodeGen::EmitIsObject(Register input,
   // Expected next instructions are
   //   cmp(temp2, Operand(LAST_NONCALLABLE_SPEC_OBJECT_TYPE));
   //   b(le, &is_object)
+  return le;
 }
 
 
@@ -1937,9 +1946,11 @@ void LCodeGen::DoIsObjectAndBranch(LIsObjectAndBranch* instr) {
   Label* true_label = chunk_->GetAssemblyLabel(true_block);
   Label* false_label = chunk_->GetAssemblyLabel(false_block);
 
-  EmitIsObject(reg, temp1, temp2, false_label, true_label);
+  Condition true_cond = 
+      EmitIsObject(reg, temp1, false_label, true_label);
+
   __ cmp(temp2, Operand(LAST_NONCALLABLE_SPEC_OBJECT_TYPE));
-  EmitBranch(true_block, false_block, le);
+  EmitBranch(true_block, false_block, true_cond);
 }
 
 
@@ -2032,7 +2043,8 @@ void LCodeGen::DoHasCachedArrayIndexAndBranch(
 }
 
 
-// Branches to a label or falls through with class name in reg temp.  Trashes
+// Branches to a label or falls through with this instance class-name adr
+// returned in temp reg, available for comparison by the caller.  Trashes
 // the temp registers, but not the input.  Only input and temp2 may alias.
 void LCodeGen::EmitClassOfTest(Label* is_true,
                                Label* is_false,
@@ -2081,8 +2093,7 @@ void LCodeGen::EmitClassOfTest(Label* is_true,
   // comparison.
   // In non-jump cases, fall through with actual class name in register temp.
   // Expected next instruction is
-  // cmp(temp, Operand(class_name));
-  // End with the answer in flags.
+  //   cmp(temp, Operand(class_name));
 }
 
 
@@ -2099,6 +2110,7 @@ void LCodeGen::DoClassOfTestAndBranch(LClassOfTestAndBranch* instr) {
   Label* false_label = chunk_->GetAssemblyLabel(false_block);
 
   EmitClassOfTest(true_label, false_label, class_name, input, temp, temp2);
+
   __ cmp(temp, Operand(class_name));
   EmitBranch(true_block, false_block, eq);
 }
@@ -3002,6 +3014,7 @@ void LCodeGen::DoDeferredMathAbsTaggedHeapNumber(LUnaryMathOperation* instr) {
   }
 
   __ bind(&done);
+
 }
 
 
@@ -3017,6 +3030,7 @@ void LCodeGen::EmitIntegerMathAbs(LUnaryMathOperation* instr) {
   __ cmp(result, Operand(0));
   DeoptimizeIf(lt, instr->environment());
   __ bind(&done);
+
 }
 
 
@@ -3908,7 +3922,7 @@ void LCodeGen::DoSmiUntag(LSmiUntag* instr) {
 void LCodeGen::EmitNumberUntagD(Register input_reg,
                                 DoubleRegister result_reg,
                                 bool deoptimize_on_undefined,
-                                LInstruction* instr) {
+                                LEnvironment* env) {
   Register scratch = scratch0();
   SwVfpRegister flt_scratch = double_scratch0().low();
   ASSERT(!result_reg.is(double_scratch0()));
@@ -3923,7 +3937,7 @@ void LCodeGen::EmitNumberUntagD(Register input_reg,
   __ LoadRoot(ip, Heap::kHeapNumberMapRootIndex);
   if (deoptimize_on_undefined) {
     __ cmp(scratch, Operand(ip));
-    DeoptimizeIf(ne, instr->environment());
+    DeoptimizeIf(ne, env);
   } else {
     Label heap_number;
     __ cmp(scratch, Operand(ip));
@@ -3931,7 +3945,7 @@ void LCodeGen::EmitNumberUntagD(Register input_reg,
 
     __ LoadRoot(ip, Heap::kUndefinedValueRootIndex);
     __ cmp(input_reg, Operand(ip));  
-    DeoptimizeIf(ne, instr->environment());
+    DeoptimizeIf(ne, env);
 
     // Convert undefined to NaN.
     __ LoadRoot(ip, Heap::kNanValueRootIndex);
@@ -4087,7 +4101,7 @@ void LCodeGen::DoNumberUntagD(LNumberUntagD* instr) {
 
   EmitNumberUntagD(input_reg, result_reg,
                    instr->hydrogen()->deoptimize_on_undefined(),
-                   instr);
+                   instr->environment());
 }
 
 
@@ -4460,12 +4474,16 @@ void LCodeGen::DoTypeofIsAndBranch(LTypeofIsAndBranch* instr) {
   int false_block = chunk_->LookupDestination(instr->false_block_id());
   Label* true_label = chunk_->GetAssemblyLabel(true_block);
   Label* false_label = chunk_->GetAssemblyLabel(false_block);
+  Register cmp1 = no_reg;
+  Operand cmp2 = Operand(no_reg);
 
   Condition final_branch_condition = EmitTypeofIs(true_label,
                                                   false_label,
                                                   input,
-                                                  instr->type_literal());
-  __ cmp(ip, Operand(0));
+                                                  instr->type_literal(),
+                                                  cmp1,
+                                                  cmp2);
+  __ cmp(cmp1, cmp2);
   EmitBranch(true_block, false_block, final_branch_condition);
 }
 
@@ -4473,7 +4491,9 @@ void LCodeGen::DoTypeofIsAndBranch(LTypeofIsAndBranch* instr) {
 Condition LCodeGen::EmitTypeofIs(Label* true_label,
                                  Label* false_label,
                                  Register input,
-                                 Handle<String> type_name) {
+                                 Handle<String> type_name,
+                                 Register& cmp1,
+                                 Operand& cmp2) {
   Condition final_branch_condition = kNoCondition;
   Register scratch = scratch0();
   if (type_name->Equals(heap()->number_symbol())) {
@@ -4538,6 +4558,8 @@ Condition LCodeGen::EmitTypeofIs(Label* true_label,
     __ b(false_label);
   }
 
+  cmp1 = at;
+  cmp2 = Operand(zero_reg);
   return final_branch_condition;
 }
 
