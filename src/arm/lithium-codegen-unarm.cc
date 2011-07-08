@@ -1039,8 +1039,7 @@ void LCodeGen::DoModI(LModI* instr) {
     // the right hand side.
     __ cmp(scratch, Operand(right));
     __ b(ge, &more);
-    if (!result.is(scratch))
-      __ mov(result, scratch);
+     __ Move(result, scratch);
     __ b(&done);
     __ bind(&more);
     // If not, reduce the left hand side by the right hand
@@ -1141,8 +1140,7 @@ void LCodeGen::DoDivI(LDivI* instr) {
   // Test for a few common cases first.
   __ cmp(right, Operand(1));
   __ b(ne, &more1);
-  if (!result.is(left))
-    __ mov(result, left);
+  __ Move(result, left);
   __ b(&done);
   __ bind(&more1);
 
@@ -2733,8 +2731,7 @@ void LCodeGen::DoArgumentsElements(LArgumentsElements* instr) {
   __ b(&done);
   // Result is the real frame below the adaptor frame if adapted.
   __ bind(&adapted);
-  if (!result.is(scratch))
-    __ mov(result, scratch);
+  __ Move(result, scratch);
   __ bind(&done);
 }
 
@@ -2941,8 +2938,7 @@ void LCodeGen::CallKnownFunction(Handle<JSFunction> function,
 void LCodeGen::DoCallConstantFunction(LCallConstantFunction* instr) {
   ASSERT(ToRegister(instr->result()).is(c_rval_reg));
   //TODO(duanes): setting r0 here is likely pointless:
-  if (!r0.is(c_rval_reg))
-    __ mov(r0, c_rval_reg);
+  __ Move(r0, c_rval_reg);
   __ mov(r1, Operand(instr->function()));
   CallKnownFunction(instr->function(),
                     instr->arity(),
@@ -2996,8 +2992,7 @@ void LCodeGen::DoDeferredMathAbsTaggedHeapNumber(LUnaryMathOperation* instr) {
 
     CallRuntimeFromDeferred(Runtime::kAllocateHeapNumber, 0, instr);
     // Set the pointer to the new heap number in tmp.
-    if (!tmp1.is(c_rval_reg))
-      __ mov(tmp1, c_rval_reg);
+    __ Move(tmp1, c_rval_reg);
     // Restore input_reg after call to runtime.
     __ LoadFromSafepointRegisterSlot(input, input);
     __ ldr(exponent, FieldMemOperand(input, HeapNumber::kExponentOffset));
@@ -3830,8 +3825,7 @@ void LCodeGen::DoDeferredNumberTagI(LNumberTagI* instr) {
   if (FLAG_inline_new) {
     __ LoadRoot(r6, Heap::kHeapNumberMapRootIndex);
     __ AllocateHeapNumber(r5, r3, r4, r6, &slow);
-    if (!reg.is(r5))
-      __ mov(reg, r5);
+    __ Move(reg, r5);
     __ b(&done);
   }
 
@@ -3844,8 +3838,7 @@ void LCodeGen::DoDeferredNumberTagI(LNumberTagI* instr) {
   __ mov(ip, Operand(0));
   __ StoreToSafepointRegisterSlot(ip, reg);
   CallRuntimeFromDeferred(Runtime::kAllocateHeapNumber, 0, instr);
-  if (!reg.is(c_rval_reg))
-     __ mov(reg, c_rval_reg);
+   __ Move(reg, c_rval_reg);
 
   // Done. Put the value in dbl_scratch into the value of the allocated heap
   // number.
