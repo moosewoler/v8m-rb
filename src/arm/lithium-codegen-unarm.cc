@@ -194,7 +194,7 @@ bool LCodeGen::GeneratePrologue() {
       __ cmp(r0, Operand(0));
       __ b(ne, &loop);
     } else {
-      __ sub(sp,  sp, Operand(slots * kPointerSize));
+      __ sub(sp, sp, Operand(slots * kPointerSize));
     }
   }
 
@@ -380,6 +380,7 @@ DoubleRegister LCodeGen::ToDoubleRegister(LOperand* op) const {
 DoubleRegister LCodeGen::EmitLoadDoubleRegister(LOperand* op,
                                                 SwVfpRegister flt_scratch,
                                                 DoubleRegister dbl_scratch) {
+  NotYet;  // and not ever
   if (op->IsDoubleRegister()) {
     return ToDoubleRegister(op->index());
   } else if (op->IsConstantOperand()) {
@@ -645,8 +646,10 @@ void LCodeGen::RegisterEnvironmentForDeoptimization(LEnvironment* environment) {
 }
 
 
-void LCodeGen::DeoptimizeIf(Condition cc, LEnvironment* environment,
-                            Register src1, const Operand& src2) {
+void LCodeGen::DeoptimizeIf(Condition cc,
+                            LEnvironment* environment,
+                            Register src1,
+                            const Operand& src2) {
   RegisterEnvironmentForDeoptimization(environment);
   ASSERT(environment->HasBeenRegistered());
   int id = environment->deoptimization_index();
@@ -660,15 +663,15 @@ void LCodeGen::DeoptimizeIf(Condition cc, LEnvironment* environment,
   ASSERT(FLAG_deopt_every_n_times < 2);  // Other values not supported on ARM.
   if (FLAG_deopt_every_n_times == 1 &&
       info_->shared_info()->opt_count() == id) {
-    cond = al;
+    cc = al;
   }
-  if (cond == al) {
+  if (cc == al) {
     __ Jump(entry, RelocInfo::RUNTIME_ENTRY);
   } else {
     if (FLAG_trap_on_deopt) {
        Label nonstop;
        __ cmp(src1, src2);
-       __ b(NegateCondition(cond), &nonstop);
+       __ b(NegateCondition(cc), &nonstop);
        __ stop("trap_on_deopt");
        __ bind(&nonstop);
     }
@@ -704,20 +707,20 @@ void LCodeGen::DeoptimizeIf(Condition cc, LEnvironment* environment) {
   ASSERT(FLAG_deopt_every_n_times < 2);  // Other values not supported on ARM.
   if (FLAG_deopt_every_n_times == 1 &&
       info_->shared_info()->opt_count() == id) {
-    cond = al;
+    cc = al;
   }
-  if (cond == al) {
+  if (cc == al) {
     __ Jump(entry, RelocInfo::RUNTIME_ENTRY);
   } else {
     if (FLAG_trap_on_deopt) {
        Label nonstop;
-       __ b(NegateCondition(cond), &nonstop);
+       __ b(NegateCondition(cc), &nonstop);
        __ stop("trap_on_deopt");
        __ bind(&nonstop);
     }
 
 #ifdef MIPS_STUB
-    __ Jump(entry, RelocInfo::RUNTIME_ENTRY, cond);
+    __ Jump(entry, RelocInfo::RUNTIME_ENTRY, cc);
 #else
     // We often have several deopts to the same entry, reuse the last
     // jump entry if this is the case.
@@ -1039,7 +1042,7 @@ void LCodeGen::DoModI(LModI* instr) {
     // the right hand side.
     __ cmp(scratch, Operand(right));
     __ b(ge, &more);
-     __ Move(result, scratch);
+    __ Move(result, scratch);
     __ b(&done);
     __ bind(&more);
     // If not, reduce the left hand side by the right hand
@@ -1353,6 +1356,7 @@ void LCodeGen::DoShiftI(LShiftI* instr) {
   Register left = ToRegister(instr->InputAt(0));
   Register result = ToRegister(instr->result());
   Register scratch = scratch0();
+
   if (right_op->IsRegister()) {
     // Mask the right_op operand.
     __ and_(scratch, ToRegister(right_op), Operand(0x1F));
@@ -1501,7 +1505,7 @@ void LCodeGen::DoElementsKind(LElementsKind* instr) {
   __ ldr(result, FieldMemOperand(input, HeapObject::kMapOffset));
   // Load the map's "bit field 2" into |result|. We only need the first byte,
   // but the following bit field extraction takes care of that anyway.
-  __ ldr(result, FieldMemOperand(result, Map::kBitField2Offset));
+  __ ldrb(result, FieldMemOperand(result, Map::kBitField2Offset));
   // Retrieve elements_kind from bit field 2.
   __ ubfx(result, result, Map::kElementsKindShift, Map::kElementsKindBitCount);
 }
@@ -1645,17 +1649,17 @@ int LCodeGen::GetNextEmittedBlock(int block) {
 
 
 #ifndef V8_TARGET_ARCH_MIPS
-void LCodeGen::EmitBranch(int left_block, int right_block, Condition cond) {
+void LCodeGen::EmitBranch(int left_block, int right_block, Condition cc) {
   int next_block = GetNextEmittedBlock(current_block_);
   right_block = chunk_->LookupDestination(right_block);
   left_block = chunk_->LookupDestination(left_block);
 
-  if (cond == kNoCondition)
+  if (cc == kNoCondition)
     return;
   if (right_block == left_block) {
     EmitGoto(left_block);
   } else if (left_block == next_block) {
-    __ b(NegateCondition(cond), chunk_->GetAssemblyLabel(right_block));
+    __ b(NegateCondition(cc), chunk_->GetAssemblyLabel(right_block));
   } else if (right_block == next_block) {
     __ b(cc, chunk_->GetAssemblyLabel(left_block));
   } else {
@@ -1829,7 +1833,7 @@ void LCodeGen::DoCmpIDAndBranch(LCmpIDAndBranch* instr) {
   LOperand* right = instr->InputAt(1);
   int false_block = chunk_->LookupDestination(instr->false_block_id());
   int true_block = chunk_->LookupDestination(instr->true_block_id());
-  Condition cond = TokenToCondition(instr->op(), instr->is_double());
+  Condition cc = TokenToCondition(instr->op(), instr->is_double());
 
   if (instr->is_double()) {
 #ifdef MIPS_STUB
@@ -1841,11 +1845,11 @@ void LCodeGen::DoCmpIDAndBranch(LCmpIDAndBranch* instr) {
     // If a NaN is involved, i.e. the result is unordered (V set),
     // jump to false block label.
     __ b(vs, chunk_->GetAssemblyLabel(false_block));
-    EmitBranch(true_block, false_block, cond);
+    EmitBranch(true_block, false_block, cc);
 #endif
   } else {
     __ cmp(ToRegister(left), ToRegister(right));
-    EmitBranch(true_block, false_block, cond);
+    EmitBranch(true_block, false_block, cc);
   }
 }
 
@@ -1944,7 +1948,7 @@ void LCodeGen::DoIsObjectAndBranch(LIsObjectAndBranch* instr) {
   Label* true_label = chunk_->GetAssemblyLabel(true_block);
   Label* false_label = chunk_->GetAssemblyLabel(false_block);
 
-  Condition true_cond = 
+  Condition true_cond =
       EmitIsObject(reg, temp1, false_label, true_label);
 
   __ cmp(temp2, Operand(LAST_NONCALLABLE_SPEC_OBJECT_TYPE));
@@ -2042,8 +2046,8 @@ void LCodeGen::DoHasCachedArrayIndexAndBranch(
 
 
 // Branches to a label or falls through with this instance class-name adr
-// returned in temp reg, available for comparison by the caller.  Trashes
-// the temp registers, but not the input.  Only input and temp2 may alias.
+// returned in temp reg, available for comparison by the caller. Trashes the
+// temp registers, but not the input. Only input and temp2 may alias.
 void LCodeGen::EmitClassOfTest(Label* is_true,
                                Label* is_false,
                                Handle<String>class_name,
@@ -2360,7 +2364,7 @@ void LCodeGen::DoStoreGlobalCell(LStoreGlobalCell* instr) {
   if (instr->hydrogen()->check_hole_value()) {
     Register scratch2 = ToRegister(instr->TempAt(0));
     __ ldr(scratch2,
-           FieldMemOperand(scratch, JSGlobalPropertyCell::kValueOffset));
+          FieldMemOperand(scratch, JSGlobalPropertyCell::kValueOffset));
     __ LoadRoot(ip, Heap::kTheHoleValueRootIndex);
     __ cmp(scratch2, ip);
     DeoptimizeIf(eq, instr->environment());
@@ -2578,7 +2582,7 @@ void LCodeGen::DoLoadExternalArrayPointer(
   Register to_reg = ToRegister(instr->result());
   Register from_reg  = ToRegister(instr->InputAt(0));
   __ ldr(to_reg, FieldMemOperand(from_reg,
-                                 ExternalArray::kExternalPointerOffset));
+                                ExternalArray::kExternalPointerOffset));
 }
 
 
@@ -2592,10 +2596,10 @@ void LCodeGen::DoAccessArgumentsAt(LAccessArgumentsAt* instr) {
   // negative check for free.
   __ cmp(length, index);
   DeoptimizeIf(ls, instr->environment());
-  __ sub(length, length, index);
 
   // There are two words between the frame pointer and the last argument.
   // Subtracting from length accounts for one of them add one more.
+  __ sub(length, length, index);
   __ add(length, length, Operand(1));
   __ mov(length, Operand(length, LSL, kPointerSizeLog2));
   __ add(result, arguments, length);
@@ -2752,7 +2756,7 @@ void LCodeGen::DoArgumentsLength(LArgumentsLength* instr) {
   // Arguments adaptor frame present. Get argument length from there.
   __ ldr(result, MemOperand(fp, StandardFrameConstants::kCallerFPOffset));
   __ ldr(result,
-         MemOperand(result, ArgumentsAdaptorFrameConstants::kLengthOffset));
+        MemOperand(result, ArgumentsAdaptorFrameConstants::kLengthOffset));
   __ SmiUntag(result);
 
   // Argument length is in result register.
@@ -2882,7 +2886,7 @@ void LCodeGen::DoOuterContext(LOuterContext* instr) {
   Register context = ToRegister(instr->context());
   Register result = ToRegister(instr->result());
   __ ldr(result,
-         MemOperand(context, Context::SlotOffset(Context::PREVIOUS_INDEX)));
+        MemOperand(context, Context::SlotOffset(Context::PREVIOUS_INDEX)));
 }
 
 
@@ -2940,10 +2944,7 @@ void LCodeGen::DoCallConstantFunction(LCallConstantFunction* instr) {
   //TODO(duanes): setting r0 here is likely pointless:
   __ Move(r0, c_rval_reg);
   __ mov(r1, Operand(instr->function()));
-  CallKnownFunction(instr->function(),
-                    instr->arity(),
-                    instr,
-                    CALL_AS_METHOD);
+  CallKnownFunction(instr->function(), instr->arity(), instr, CALL_AS_METHOD);
 }
 
 
@@ -3609,7 +3610,6 @@ void LCodeGen::DoStringCharCodeAt(LStringCharCodeAt* instr) {
     index = ToRegister(instr->index());
   }
   Register result = ToRegister(instr->result());
-
   DeferredStringCharCodeAt* deferred =
       new DeferredStringCharCodeAt(this, instr);
 
@@ -3838,7 +3838,7 @@ void LCodeGen::DoDeferredNumberTagI(LNumberTagI* instr) {
   __ mov(ip, Operand(0));
   __ StoreToSafepointRegisterSlot(ip, reg);
   CallRuntimeFromDeferred(Runtime::kAllocateHeapNumber, 0, instr);
-   __ Move(reg, c_rval_reg);
+  __ Move(reg, c_rval_reg);
 
   // Done. Put the value in dbl_scratch into the value of the allocated heap
   // number.
@@ -4024,6 +4024,7 @@ void LCodeGen::DoDeferredTaggedToI(LTaggedToI* instr) {
 
   } else {
     CpuFeatures::Scope scope(VFP3);
+
     // Deoptimize if we don't have a heap number.
     __ cmp(scratch1, Operand(ip));
     DeoptimizeIf(ne, instr->environment());
@@ -4468,6 +4469,7 @@ void LCodeGen::DoTypeofIsAndBranch(LTypeofIsAndBranch* instr) {
   int false_block = chunk_->LookupDestination(instr->false_block_id());
   Label* true_label = chunk_->GetAssemblyLabel(true_block);
   Label* false_label = chunk_->GetAssemblyLabel(false_block);
+
   Register cmp1 = no_reg;
   Operand cmp2 = Operand(no_reg);
 
@@ -4552,8 +4554,8 @@ Condition LCodeGen::EmitTypeofIs(Label* true_label,
     __ b(false_label);
   }
 
-  cmp1 = at;
-  cmp2 = Operand(zero_reg);
+  cmp1 = ip;
+  cmp2 = Operand(0);
   return final_branch_condition;
 }
 

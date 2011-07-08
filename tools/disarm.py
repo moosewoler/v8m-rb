@@ -136,21 +136,19 @@ def process_line(fi, fo, line1):
       elif op1 == 'cmp' and func2 == 'DeoptimizeIf':
           indent, reg1, operand2, comment1 = iparts1
           indent2, cond, env, comment2 = fparts2
-          if env != 'instr->environment()':
-            print 'error: expecting instr->environment() in', repr(line2[:-1])
           if cond in ('mi', 'pl') and operand2 == 'Operand(0)':
             cond = 'lt' if cond == 'mi' else 'ge'
-          line1 = '%sDeoptimizeIf(%s, instr->environment(), %s, %s);%s\n' % (
-                  indent, cond, reg1, operand2, comment1+comment2)
+          line1 = '%sDeoptimizeIf(%s, %s, %s, %s);%s\n' % (
+                  indent, cond, env, reg1, operand2, comment1+comment2)
           line2 = fi.readline()
       elif op1 == 'tst' and func2 == 'DeoptimizeIf':
           indent, reg1, operand2, comment1 = iparts1
           indent2, cond, env, comment2 = fparts2
           assert env == 'instr->environment()'
           line1 = ('%s__ and_(ip, %s, %s);%s\n'
-                   '%sDeoptimizeIf(%s, instr->environment(), ip, Operand(0));%s\n'
+                   '%sDeoptimizeIf(%s, %s, ip, Operand(0));%s\n'
                    % (indent, reg1, operand2, comment1,
-                      indent, cond, comment2))
+                      indent, cond, env, comment2))
           line2 = fi.readline()
       elif op1 == 'cmp' and func2 == 'EmitBranch':
           indent, reg1, operand2, comment1 = iparts1

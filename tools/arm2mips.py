@@ -23,7 +23,7 @@ ARM_TO_MIPS = {
   'vcvt_f64_f32': 'cvt_d_s',
   'vcvt_s32_f64': 'cvt_w_d',
   'vcvt_f32_f64': 'cvt_s_d',
-  'b': 'Branch',
+  'b': 'Branch',  'jmp': 'Branch',
   'ubfx': 'Ext',
   }
 
@@ -157,6 +157,7 @@ def reg_operand(arg):
   return arg
 
 def rename_regs(line):
+  if line.startswith('#define'):  return line
   for armreg,mipsreg in REG_RENAMES.iteritems():
     aw = len(armreg)
     mw = len(mipsreg)
@@ -222,10 +223,10 @@ def process_line(fi, fo, line1):
     elif op1 == 'smull':
       indent, prod_reg_lo, prod_reg_hi, src1, src2, comment = iparts1
       line1 = ('%s__ mult(%s, %s);%s\n'
-               '%s__ mflo(%s);\n'
                '%s__ mfhi(%s);\n'
+               '%s__ mflo(%s);\n'
                % (indent, src1, src2, comment,
-                  indent, prod_reg_lo, indent, prod_reg_hi))
+                  indent, prod_reg_hi, indent, prod_reg_lo))
     elif op1 in ['vldr', 'vstr'] and len(iparts1) == 5:
       indent, reg1, reg2, imm3, comment = iparts1
       mips_op = 'ldc1' if op1 == 'vldr' else 'sdc1'
