@@ -4419,6 +4419,7 @@ void LCodeGen::DoRegExpLiteral(LRegExpLiteral* instr) {
   __ mov(r0, Operand(Smi::FromInt(size)));
   __ Push(r1, r0);
   CallRuntime(Runtime::kAllocateInNewSpace, 1, instr);
+  __ Move(r0, c_rval_reg);
   __ pop(r1);
 
   __ bind(&allocated);
