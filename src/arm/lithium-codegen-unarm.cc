@@ -2150,6 +2150,9 @@ void LCodeGen::DoInstanceOf(LInstanceOf* instr) {
 
 
 void LCodeGen::DoInstanceOfKnownGlobal(LInstanceOfKnownGlobal* instr) {
+#ifdef MIPS_STUB
+  NotYet;
+#else
   class DeferredInstanceOfKnownGlobal: public LDeferredCode {
    public:
     DeferredInstanceOfKnownGlobal(LCodeGen* codegen,
@@ -2224,6 +2227,7 @@ void LCodeGen::DoInstanceOfKnownGlobal(LInstanceOfKnownGlobal* instr) {
   // false object.
   __ bind(deferred->exit());
   __ bind(&done);
+#endif
 }
 
 
