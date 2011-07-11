@@ -992,6 +992,53 @@ void MacroAssembler::ConvertToInt32(Register source,
 }
 
 
+void MacroAssembler::EmitVFPTruncate(FPURoundingMode rounding_mode,
+                                     FPURegister result,
+                                     DoubleRegister double_input,
+                                     Register scratch1,
+                                     Register except_flag,
+                                     CheckForInexactConversion check_inexact) {
+  ASSERT(CpuFeatures::IsSupported(FPU));
+  CpuFeatures::Scope scope(FPU);
+
+  int32_t except_mask = kFCSRFlagMask;  // Assume interested in all exceptions.
+
+  if (check_inexact == kDontCheckForInexactConversion) {
+    // Ingore inexact exceptions.
+    except_mask &= ~kFCSRInexactFlagMask;
+  }
+
+  // Save FCSR.
+  cfc1(scratch1, FCSR);
+  // Disable FPU exceptions.
+  ctc1(zero_reg, FCSR);
+
+  // Do operation based on rounding mode.
+  switch (rounding_mode) {
+    case kRoundToNearest:
+      round_w_d(result, double_input);
+      break;
+    case kRoundToZero:
+      trunc_w_d(result, double_input);
+      break;
+    case kRoundToPlusInf:
+      ceil_w_d(result, double_input);
+      break;
+    case kRoundToMinusInf:
+      floor_w_d(result, double_input);
+      break;
+  }  // End of switch-statement.
+
+  // Retrieve FCSR.
+  cfc1(except_flag, FCSR);
+  // Restore FCSR.
+  ctc1(scratch1, FCSR);
+
+  // Check for fpu exceptions.
+  And(except_flag, except_flag, Operand(except_mask));
+}
+
+
 void MacroAssembler::EmitOutOfInt32RangeTruncate(Register result,
                                                  Register input_high,
                                                  Register input_low,
@@ -2031,27 +2078,8 @@ int MacroAssembler::CallSize(Address target,
                              Register rs,
                              const Operand& rt,
                              BranchDelaySlot bd) {
-  int size = 0;
-  int32_t target_int = reinterpret_cast<int32_t>(target);
-  if (!MustUseReg(rmode) && is_uint28(target_int)) {
-    if (cond == cc_always) {
-      size += 1;
-    } else {
-      size += 3;
-    }
-  } else {  // MustUseReg
-    size += 2;
-    if (cond == cc_always) {
-      size += 1;
-    } else {
-      size += 3;
-    }
-  }
-
-  if (bd == PROTECT)
-    size += 1;
-
-  return size * kInstrSize;
+  int size = CallSize(t9, cond, rs, rt, bd);
+  return size + 2 * kInstrSize;
 }
 
 
@@ -2065,32 +2093,11 @@ void MacroAssembler::Call(Address target,
   Label start;
   bind(&start);
   int32_t target_int = reinterpret_cast<int32_t>(target);
-
-  if (!MustUseReg(rmode)  && is_uint28(target_int)) {
-    if (cond == cc_always) {
-      jal(target_int);
-    } else {
-      BRANCH_ARGS_CHECK(cond, rs, rt);
-      Branch(2, NegateCondition(cond), rs, rt);
-      jal(target_int);  // Will generate only one instruction.
-    }
-  } else {  // MustUseReg
-    // Must record previous source positions before the
-    // li() generates a new code target.
-    positions_recorder()->WriteRecordedPositions();
-    li(t9, Operand(target_int, rmode), true);
-    if (cond == cc_always) {
-      jalr(t9);
-    } else {
-      BRANCH_ARGS_CHECK(cond, rs, rt);
-      Branch(2, NegateCondition(cond), rs, rt);
-      jalr(t9);  // Will generate only one instruction.
-    }
-  }
-
-  if (bd == PROTECT)
-    nop();
-
+  // Must record previous source positions before the
+  // li() generates a new code target.
+  positions_recorder()->WriteRecordedPositions();
+  li(t9, Operand(target_int, rmode), true);
+  Call(t9, cond, rs, rt, bd);
   ASSERT_EQ(CallSize(target, rmode, cond, rs, rt, bd),
             SizeOfCodeGeneratedSince(&start));
 }
@@ -3530,9 +3537,16 @@ void MacroAssembler::SubuAndCheckForOverflow(Register dst,
   ASSERT(!overflow_dst.is(scratch));
   ASSERT(!overflow_dst.is(left));
   ASSERT(!overflow_dst.is(right));
-  ASSERT(!left.is(right));
   ASSERT(!scratch.is(left));
   ASSERT(!scratch.is(right));
+
+  // This happens with some crankshaft code. Since Subu works fine if
+  // left == right, let's not make that restriction here.
+  if (left.is(right)) {
+    mov(dst, zero_reg);
+    mov(overflow_dst, zero_reg);
+    return;
+  }
 
   if (dst.is(left)) {
     mov(scratch, left);  // Preserve left.
@@ -4320,6 +4334,51 @@ void MacroAssembler::LoadInstanceDescriptors(Register map,
   JumpIfNotSmi(descriptors, &not_smi);
   li(descriptors, Operand(FACTORY->empty_descriptor_array()));
   bind(&not_smi);
+}
+
+
+void MacroAssembler::ClampUint8(Register output_reg, Register input_reg) {
+  ASSERT(!output_reg.is(input_reg));
+  Label done;
+  li(output_reg, Operand(255));
+  // Normal branch: nop in delay slot.
+  Branch(&done, gt, input_reg, Operand(output_reg));
+  // Use delay slot in this branch.
+  Branch(USE_DELAY_SLOT, &done, lt, input_reg, Operand(zero_reg));
+  mov(output_reg, zero_reg);  // In delay slot.
+  mov(output_reg, input_reg);  // Value is in range 0..255.
+  bind(&done);
+}
+
+
+void MacroAssembler::ClampDoubleToUint8(Register result_reg,
+                                        DoubleRegister input_reg,
+                                        DoubleRegister temp_double_reg) {
+  Label above_zero;
+  Label done;
+  Label in_bounds;
+
+  Move(temp_double_reg, 0.0);
+  BranchF(&above_zero, NULL, gt, input_reg, temp_double_reg);
+
+  // Double value is less than zero, NaN or Inf, return 0.
+  mov(result_reg, zero_reg);
+  Branch(&done);
+
+  // Double value is >= 255, return 255.
+  bind(&above_zero);
+  Move(temp_double_reg, 255.0);
+  BranchF(&in_bounds, NULL, le, input_reg, temp_double_reg);
+  li(result_reg, Operand(255));
+  Branch(&done);
+
+  // In 0-255 range, round and truncate.
+  bind(&in_bounds);
+  // TODO(kalmard): the ARM version adds 0.5 and then truncates.
+  // Isn't this the same as rounding?
+  round_w_d(temp_double_reg, input_reg);
+  mfc1(result_reg, temp_double_reg);
+  bind(&done);
 }
 
 

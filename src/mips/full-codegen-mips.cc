@@ -309,10 +309,19 @@ void FullCodeGenerator::ClearAccumulator() {
 
 
 void FullCodeGenerator::EmitStackCheck(IterationStatement* stmt) {
+  // The generated code is used in Deoptimizer::PatchStackCheckCodeAt so we need
+  // to make sure it is constant.
+  // TODO(kalmard): some new Branch and trampoline pool changes can cause Branch
+  // to emit a skip-or-jump sequence instead of the normal Branch. It seems that
+  // the "skip" part of that sequence is about as long as this Branch would be
+  // so it is safe to ignore that. Still, this may cause problems.
+  Assembler::BlockTrampolinePoolScope block_trampoline_pool(masm_);
   Comment cmnt(masm_, "[ Stack check");
   Label ok;
   __ LoadRoot(t0, Heap::kStackLimitRootIndex);
-  __ Branch(&ok, hs, sp, Operand(t0));
+  __ sltu(at, sp, t0);
+  __ beq(at, zero_reg, &ok);
+  // CallStub will emit a li t9, ... first, so it is safe to use the delay slot.
   StackCheckStub stub;
   __ CallStub(&stub);
   // Record a mapping of this PC offset to the OSR id.  This is used to find
@@ -4275,7 +4284,7 @@ void FullCodeGenerator::PushFunctionArgumentForContextAllocation() {
     // code.  Fetch it from the context.
     __ lw(at, ContextOperand(cp, Context::CLOSURE_INDEX));
   } else {
-    ASSERT(declaration_scope->is_function_scope() || declaration_scope->is_catch_scope());
+    ASSERT(declaration_scope->is_function_scope());
     __ lw(at, MemOperand(fp, JavaScriptFrameConstants::kFunctionOffset));
   }
   __ push(at);
