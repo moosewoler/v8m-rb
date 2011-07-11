@@ -4306,7 +4306,7 @@ void LCodeGen::DoRegExpLiteral(LRegExpLiteral* instr) {
   // a3 = JS function.
   // t3 = literals array.
   // a1 = regexp literal.
-  // a0 = regexp literal clone.
+  // v0 = regexp literal clone.
   // a2 and t0-t2 are used as temporaries.
   __ lw(a3, MemOperand(fp, JavaScriptFrameConstants::kFunctionOffset));
   __ lw(t3, FieldMemOperand(a3, JSFunction::kLiteralsOffset));
@@ -4329,14 +4329,13 @@ void LCodeGen::DoRegExpLiteral(LRegExpLiteral* instr) {
   int size = JSRegExp::kSize + JSRegExp::kInObjectFieldCount * kPointerSize;
   Label allocated, runtime_allocate;
 
-  __ AllocateInNewSpace(size, a0, a2, a3, &runtime_allocate, TAG_OBJECT);
+  __ AllocateInNewSpace(size, v0, a2, a3, &runtime_allocate, TAG_OBJECT);
   __ Branch(&allocated);
 
   __ bind(&runtime_allocate);
   __ li(a0, Operand(Smi::FromInt(size)));
   __ Push(a1, a0);
   CallRuntime(Runtime::kAllocateInNewSpace, 1, instr);
-  __ Move(a0, v0);
   __ pop(a1);
 
   __ bind(&allocated);
@@ -4345,12 +4344,12 @@ void LCodeGen::DoRegExpLiteral(LRegExpLiteral* instr) {
   for (int i = 0; i < size - kPointerSize; i += 2 * kPointerSize) {
     __ lw(a3, FieldMemOperand(a1, i));
     __ lw(a2, FieldMemOperand(a1, i + kPointerSize));
-    __ sw(a3, FieldMemOperand(a0, i));
-    __ sw(a2, FieldMemOperand(a0, i + kPointerSize));
+    __ sw(a3, FieldMemOperand(v0, i));
+    __ sw(a2, FieldMemOperand(v0, i + kPointerSize));
   }
   if ((size % (2 * kPointerSize)) != 0) {
     __ lw(a3, FieldMemOperand(a1, size - kPointerSize));
-    __ sw(a3, FieldMemOperand(a0, size - kPointerSize));
+    __ sw(a3, FieldMemOperand(v0, size - kPointerSize));
   }
 }
 
