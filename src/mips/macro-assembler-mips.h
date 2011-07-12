@@ -103,10 +103,6 @@ class MacroAssembler: public Assembler {
   // macro assembler.
   MacroAssembler(Isolate* isolate, void* buffer, int size);
 
-  // Arguments macros.
-#define COND_TYPED_ARGS Condition cond, Register r1, const Operand& r2
-#define COND_ARGS cond, r1, r2
-
   // Cases when relocation is not needed.
 #define DECLARE_NORELOC_PROTOTYPE(Name, target_type) \
   void Name(target_type target, BranchDelaySlot bd = PROTECT); \
@@ -114,12 +110,17 @@ class MacroAssembler: public Assembler {
     Name(target, bd); \
   } \
   void Name(target_type target, \
-            COND_TYPED_ARGS, \
+            Condition cond, Register r1, const Operand& r2, \
             BranchDelaySlot bd = PROTECT); \
+  inline void Name(target_type target, \
+                   Condition cond, Register r1, Register r2, \
+                   BranchDelaySlot bd = PROTECT) { \
+    Name(target, cond, r1, Operand(r2), bd); \
+  } \
   inline void Name(BranchDelaySlot bd, \
                    target_type target, \
-                   COND_TYPED_ARGS) { \
-    Name(target, COND_ARGS, bd); \
+                   Condition cond, Register r1, const Operand& r2) { \
+    Name(target, cond, r1, r2, bd); \
   }
 
 #define DECLARE_BRANCH_PROTOTYPES(Name) \
@@ -128,12 +129,7 @@ class MacroAssembler: public Assembler {
 
   DECLARE_BRANCH_PROTOTYPES(Branch)
   DECLARE_BRANCH_PROTOTYPES(BranchAndLink)
-  inline void Branch(Label* L, Condition cond, Register src1, Register src2) {
-    Branch(L, cond, src1, Operand(src2));
-  }
 #undef DECLARE_BRANCH_PROTOTYPES
-#undef COND_TYPED_ARGS
-#undef COND_ARGS
 
 
   // Jump, Call, and Ret pseudo instructions implementing inter-working.

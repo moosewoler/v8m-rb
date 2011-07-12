@@ -227,9 +227,6 @@ class LCodeGen BASE_EMBEDDED {
                            Register src1, Register src2) {
     DeoptimizeIf(cc, environment, src1, Operand(src2));
   }
-  inline void Deoptimize(LEnvironment* environment) {
-    DeoptimizeIf(al, environment, at, at);
-  }
 
   void AddToTranslation(Translation* translation,
                         LOperand* op,
@@ -278,10 +275,6 @@ class LCodeGen BASE_EMBEDDED {
                   Condition cc,
                   Register src1,
                   const Operand& src2);
-  void EmitBranch(int left_block, int right_block,
-                  Condition cc, Register src1, Register src2) {
-    EmitBranch(left_block, right_block, cc, src1, Operand(src2));
-  }
   void EmitBranchF(int left_block,
                    int right_block,
                    Condition cc,

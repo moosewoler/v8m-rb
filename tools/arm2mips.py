@@ -23,8 +23,10 @@ ARM_TO_MIPS = {
   'vcvt_f64_f32': 'cvt_d_s',
   'vcvt_s32_f64': 'cvt_w_d',
   'vcvt_f32_f64': 'cvt_s_d',
+  'vsqrt': 'sqrt_d',
   'b': 'Branch',  'jmp': 'Branch',
   'ubfx': 'Ext',
+  'movt': 'arm_movt',
   }
 
 ARM_TO_MIPS_IMM = {
@@ -52,7 +54,7 @@ UNSIGNED_COMPARES = {'lo': 'lt', 'ls': 'le', 'hs': 'ge', 'hi': 'gt'}
 COMMON_REGNAMES = set(['at', 'fp', 'sp', 'cp', 'a0', 'a1', 'a2', 'a3',
                        'zero_reg',
                        'left', 'right', 'input', 'reg',
-                       'left_reg', 'right_reg', 'input_reg',])
+                       'left_reg', 'right_reg', 'input_reg', 'result_reg'])
 
 REG_RENAMES = {
   'r0': 'a0', 'r1': 'a1', 'r2': 'a2', 'r3': 'a3',
@@ -156,6 +158,19 @@ def reg_operand(arg):
     return ''
   return arg
 
+def single_fp_reg(reg):
+  return (reg.endswith('.high()') or
+          reg.endswith('.low()') or
+          reg.startswith('single_'))
+
+def is_value(operand):
+  try:
+    val = float(operand)
+    return True
+  except:
+    pass
+  return operand == 'v'    
+
 def rename_regs(line):
   if line.startswith('#define'):  return line
   for armreg,mipsreg in REG_RENAMES.iteritems():
@@ -250,20 +265,26 @@ def process_line(fi, fo, orig_line):
     elif op1 in ['vldr', 'vstr'] and len(iparts1) == 5:
       indent, reg1, reg2, imm3, comment = iparts1
       mips_op = 'ldc1' if op1 == 'vldr' else 'sdc1'
+      if single_fp_reg(reg1):
+        mips_op = mips_op.replace('d', 'w')
       line1 = ('%s__ %s(%s, MemOperand(%s, %s));%s\n'
                % (indent, mips_op, reg1, reg2, imm3, comment))
     elif op1 in ['vldr', 'vstr'] and len(iparts1) == 4:
       indent, reg1, operand2, comment = iparts1
       mips_op = 'ldc1' if op1 == 'vldr' else 'sdc1'
+      if single_fp_reg(reg1):
+        mips_op = mips_op.replace('d', 'w')
       line1 = ('%s__ %s(%s, %s);%s\n'
                % (indent, mips_op, reg1, operand2, comment))
     elif op1 == 'vmov' or op1 == 'Vmov':
       indent, reg1, reg2, comment = iparts1
-      if reg1.endswith('.high()') or reg1.endswith('.low()') or likely_int_reg(reg2):
+      if single_fp_reg(reg1) or likely_int_reg(reg2):
         mips_op = 'mtc1'
         reg1, reg2 = reg2, reg1
-      elif reg2.endswith('.high()') or reg2.endswith('.low()') or likely_int_reg(reg1):
+      elif single_fp_reg(reg2) or likely_int_reg(reg1):
         mips_op = 'mfc1'
+      elif is_value(reg2):
+        mips_op = 'Move'
       else:
         mips_op = 'mov_d'
       line1 = ('%s__ %s(%s, %s);%s\n'

@@ -225,9 +225,6 @@ class LCodeGen BASE_EMBEDDED {
                     Register src1, Register src2) {
     DeoptimizeIf(cc, environment, src1, Operand(src2));
   }
-  inline void Deoptimize(LEnvironment* environment) {
-    DeoptimizeIf(al, environment, ip, ip);
-  }
 
   void AddToTranslation(Translation* translation,
                         LOperand* op,

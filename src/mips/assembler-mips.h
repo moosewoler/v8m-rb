@@ -647,33 +647,15 @@ class Assembler : public AssemblerBase {
   void beq(Register rs, Register rt, Label* L) {
     beq(rs, rt, branch_offset(L, false) >> 2);
   }
-  void beqz(Register rs, Label* L) {
-    beq(rs, zero_reg, L);
-  }
   void bgez(Register rs, int16_t offset);
-  void bgez(Register rs, Label* L) {
-    bgez(rs, branch_offset(L, false)>>2);
-  }
   void bgezal(Register rs, int16_t offset);
   void bgtz(Register rs, int16_t offset);
-  void bgtz(Register rs, Label* L) {
-    bgtz(rs, branch_offset(L, false)>>2);
-  }
   void blez(Register rs, int16_t offset);
-  void blez(Register rs, Label* L) {
-    blez(rs, branch_offset(L, false)>>2);
-  }
   void bltz(Register rs, int16_t offset);
-  void bltz(Register rs, Label* L) {
-    bltz(rs, branch_offset(L, false)>>2);
-  }
   void bltzal(Register rs, int16_t offset);
   void bne(Register rs, Register rt, int16_t offset);
   void bne(Register rs, Register rt, Label* L) {
     bne(rs, rt, branch_offset(L, false)>>2);
-  }
-  void bnez(Register rs, Label* L) {
-    bne(rs, zero_reg, L);
   }
 
   // Never use the int16_t b(l)cond version with a branch offset

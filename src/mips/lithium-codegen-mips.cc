@@ -1384,6 +1384,9 @@ void LCodeGen::EmitBranch(int left_block, int right_block,
   int next_block = GetNextEmittedBlock(current_block_);
   right_block = chunk_->LookupDestination(right_block);
   left_block = chunk_->LookupDestination(left_block);
+
+  if (cc == kNoCondition)
+    return;
   if (right_block == left_block) {
     EmitGoto(left_block);
   } else if (left_block == next_block) {
@@ -1403,6 +1406,9 @@ void LCodeGen::EmitBranchF(int left_block, int right_block,
   int next_block = GetNextEmittedBlock(current_block_);
   right_block = chunk_->LookupDestination(right_block);
   left_block = chunk_->LookupDestination(left_block);
+
+  if (cc == kNoCondition)
+    return;
   if (right_block == left_block) {
     EmitGoto(left_block);
   } else if (left_block == next_block) {
@@ -3821,7 +3827,7 @@ void LCodeGen::DoClampTToUint8(LClampTToUint8* instr) {
   // Check for undefined. Undefined is converted to zero for clamping
   // conversions.
   DeoptimizeIf(ne, instr->environment(), input_reg, Operand(factory()->undefined_value()));
-  __ Ext(input_reg, input_reg, 0, 16);
+  __ li(result_reg, 0);
   __ jmp(&done);
 
   // Heap number
@@ -3940,7 +3946,7 @@ void LCodeGen::DoToFastProperties(LToFastProperties* instr) {
 
 
 void LCodeGen::DoRegExpLiteral(LRegExpLiteral* instr) {
-  // Auto-generated function, 11-July-2011. Hand-tweaked by plind.
+  // Auto-generated function, 12-July-2011.
   Label materialized;
   // Registers will be used as follows:
   // a3 = JS function.

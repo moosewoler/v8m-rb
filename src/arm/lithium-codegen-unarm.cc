@@ -1188,7 +1188,7 @@ void LCodeGen::DoDivI(LDivI* instr) {
   __ b(&done);
 
   __ bind(&deoptimize);
-  Deoptimize(instr->environment());
+  DeoptimizeIf(al, instr->environment(), ip, ip);
   __ bind(&done);
 }
 
@@ -1468,14 +1468,10 @@ void LCodeGen::DoConstantI(LConstantI* instr) {
 
 
 void LCodeGen::DoConstantD(LConstantD* instr) {
-#ifdef MIPS_STUB
-  NotYet;
-#else
   ASSERT(instr->result()->IsDoubleRegister());
   DwVfpRegister result = ToDoubleRegister(instr->result());
   double v = instr->value();
   __ Vmov(result, v);
-#endif
 }
 
 
@@ -1612,11 +1608,9 @@ void LCodeGen::DoArithmeticD(LArithmeticD* instr) {
       __ vdiv(result, left, right);
       break;
     case Token::MOD: {
-#ifdef MIPS_STUB
-      NotYet;
-#else
       // Save r0-r3 on the stack.
-      __ stm(db_w, sp, r0.bit() | r1.bit() | r2.bit() | r3.bit());
+      RegList saved_regs = r0.bit() | r1.bit() | r2.bit() | r3.bit();
+      __ MultiPush(saved_regs);
 
       __ PrepareCallCFunction(0, 2, scratch0());
       __ SetCallCDoubleArguments(left, right);
@@ -1626,9 +1620,8 @@ void LCodeGen::DoArithmeticD(LArithmeticD* instr) {
       // Move the result in the double result register.
       __ GetCFunctionDoubleResult(result);
 
-      // Restore r0-r3.
-      __ ldm(ia_w, sp, r0.bit() | r1.bit() | r2.bit() | r3.bit());
-#endif
+      // Restore saved registers.
+      __ MultiPop(saved_regs);
       break;
     }
     default:
@@ -1730,7 +1723,7 @@ void LCodeGen::DoBranch(LBranch* instr) {
     Register reg = ToRegister(instr->InputAt(0));
     if (instr->hydrogen()->value()->type().IsBoolean()) {
       __ LoadRoot(ip, Heap::kTrueValueRootIndex);
-      __ cmp(reg, ip);
+      __ cmp(reg, Operand(ip));
       EmitBranch(true_block, false_block, eq);
     } else {
       Label* true_label = chunk_->GetAssemblyLabel(true_block);
@@ -1857,7 +1850,7 @@ void LCodeGen::DoCmpIDAndBranch(LCmpIDAndBranch* instr) {
     EmitBranch(true_block, false_block, cc);
 #endif
   } else {
-    __ cmp(ToRegister(left), ToRegister(right));
+    __ cmp(ToRegister(left), Operand(ToRegister(right)));
     EmitBranch(true_block, false_block, cc);
   }
 }
@@ -1896,7 +1889,7 @@ void LCodeGen::DoIsNullAndBranch(LIsNullAndBranch* instr) {
 
   __ LoadRoot(ip, Heap::kNullValueRootIndex);
   if (instr->is_strict()) {
-    __ cmp(reg, ip);
+    __ cmp(reg, Operand(ip));
     EmitBranch(true_block, false_block, eq);
   } else {
     Label* true_label = chunk_->GetAssemblyLabel(true_block);
@@ -3189,13 +3182,9 @@ void LCodeGen::DoMathRound(LUnaryMathOperation* instr) {
 
 
 void LCodeGen::DoMathSqrt(LUnaryMathOperation* instr) {
-#ifdef MIPS_STUB
-  NotYet;
-#else
   DoubleRegister input = ToDoubleRegister(instr->InputAt(0));
   DoubleRegister result = ToDoubleRegister(instr->result());
   __ vsqrt(result, input);
-#endif
 }
 
 
@@ -3950,7 +3939,7 @@ void LCodeGen::EmitNumberUntagD(Register input_reg,
     __ b(eq, &heap_number);
 
     __ LoadRoot(ip, Heap::kUndefinedValueRootIndex);
-    __ cmp(input_reg, Operand(ip));  
+    __ cmp(input_reg, Operand(ip));
     DeoptimizeIf(ne, env);
 
     // Convert undefined to NaN.
@@ -4229,32 +4218,21 @@ void LCodeGen::DoCheckMap(LCheckMap* instr) {
 
 
 void LCodeGen::DoClampDToUint8(LClampDToUint8* instr) {
-#ifdef MIPS_STUB
-  NotYet;
-#else
   DoubleRegister value_reg = ToDoubleRegister(instr->unclamped());
   Register result_reg = ToRegister(instr->result());
   DoubleRegister temp_reg = ToDoubleRegister(instr->TempAt(0));
   __ ClampDoubleToUint8(result_reg, value_reg, temp_reg);
-#endif
 }
 
 
 void LCodeGen::DoClampIToUint8(LClampIToUint8* instr) {
-#ifdef MIPS_STUB
-  NotYet;
-#else
   Register unclamped_reg = ToRegister(instr->unclamped());
   Register result_reg = ToRegister(instr->result());
   __ ClampUint8(result_reg, unclamped_reg);
-#endif
 }
 
 
 void LCodeGen::DoClampTToUint8(LClampTToUint8* instr) {
-#ifdef MIPS_STUB
-  NotYet;
-#else
   Register scratch = scratch0();
   Register input_reg = ToRegister(instr->unclamped());
   Register result_reg = ToRegister(instr->result());
@@ -4273,13 +4251,13 @@ void LCodeGen::DoClampTToUint8(LClampTToUint8* instr) {
   // conversions.
   __ cmp(input_reg, Operand(factory()->undefined_value()));
   DeoptimizeIf(ne, instr->environment());
-  __ movt(input_reg, 0);
+  // movt(input_reg, 0);  // movt & input_reg are bugs in lithium-codegen-arm
+  __ mov(result_reg, Operand(0));
   __ jmp(&done);
 
   // Heap number
   __ bind(&heap_number);
-  __ vldr(double_scratch0(), FieldMemOperand(input_reg,
-                                             HeapNumber::kValueOffset));
+  __ vldr(double_scratch0(), FieldMemOperand(input_reg, HeapNumber::kValueOffset));
   __ ClampDoubleToUint8(result_reg, double_scratch0(), temp_reg);
   __ jmp(&done);
 
@@ -4289,7 +4267,6 @@ void LCodeGen::DoClampTToUint8(LClampTToUint8* instr) {
   __ ClampUint8(result_reg, result_reg);
 
   __ bind(&done);
-#endif
 }
 
 
@@ -4609,7 +4586,7 @@ void LCodeGen::DoLazyBailout(LLazyBailout* instr) {
 
 
 void LCodeGen::DoDeoptimize(LDeoptimize* instr) {
-  Deoptimize(instr->environment());
+  DeoptimizeIf(al, instr->environment(), ip, ip);
 }
 
 
