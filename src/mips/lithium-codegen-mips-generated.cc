@@ -1725,8 +1725,7 @@ void LCodeGen::DoBranch(LBranch* instr) {
       __ lw(scratch, FieldMemOperand(reg, HeapObject::kMapOffset));
       __ LoadRoot(at, Heap::kHeapNumberMapRootIndex);
       __ Branch(&call_stub, ne, scratch, Operand(at));
-      __ Addu(at, reg, -kHeapObjectTag);
-      __ ldc1(dbl_scratch, MemOperand(at, HeapNumber::kValueOffset));
+      __ ldc1(dbl_scratch, FieldMemOperand(reg, HeapNumber::kValueOffset));
       __ VFPCompareAndLoadFlags(dbl_scratch, 0.0, scratch);
       __ And(at, scratch, kVFPZConditionFlagBit | kVFPVConditionFlagBit);
       __ Branch(false_label, ne, at, Operand(zero_reg));
@@ -3174,9 +3173,7 @@ void LCodeGen::DoPower(LPower* instr) {
     __ lw(scratch, FieldMemOperand(right_reg, HeapObject::kMapOffset));
     __ LoadRoot(at, Heap::kHeapNumberMapRootIndex);
     DeoptimizeIf(ne, instr->environment(), scratch, Operand(at));
-    int32_t value_offset = HeapNumber::kValueOffset - kHeapObjectTag;
-    __ Addu(scratch, right_reg, value_offset);
-    __ ldc1(result_reg, MemOperand(scratch, 0));
+    __ ldc1(result_reg, FieldMemOperand(right_reg, HeapNumber::kValueOffset));
 
     // Prepare arguments and call C function.
     __ bind(&call);
@@ -3589,8 +3586,7 @@ void LCodeGen::DoStringCharCodeAt(LStringCharCodeAt* instr) {
   } else {
     __ sll(scratch, index, 1);
     __ addu(scratch, scratch, string);
-    __ lhu(result, MemOperand(scratch,
-                               SeqTwoByteString::kHeaderSize - kHeapObjectTag));
+    __ lhu(result, FieldMemOperand(scratch, SeqTwoByteString::kHeaderSize));
   }
   __ Branch(&done);
 
@@ -3602,8 +3598,7 @@ void LCodeGen::DoStringCharCodeAt(LStringCharCodeAt* instr) {
                                     SeqAsciiString::kHeaderSize + const_index));
   } else {
     __ addu(scratch, string, index);
-    __ lbu(result, MemOperand(scratch,
-                               SeqAsciiString::kHeaderSize - kHeapObjectTag));
+    __ lbu(result, FieldMemOperand(scratch, SeqAsciiString::kHeaderSize));
 
   }
   __ bind(&done);
@@ -3768,8 +3763,7 @@ void LCodeGen::DoDeferredNumberTagI(LNumberTagI* instr) {
   // Done. Put the value in dbl_scratch into the value of the allocated heap
   // number.
   __ bind(&done);
-  __ Addu(at, reg, -kHeapObjectTag);
-  __ sdc1(dbl_scratch, MemOperand(at, HeapNumber::kValueOffset));
+  __ sdc1(dbl_scratch, FieldMemOperand(reg, HeapNumber::kValueOffset));
   __ StoreToSafepointRegisterSlot(reg, reg);
 }
 
@@ -3798,8 +3792,7 @@ void LCodeGen::DoNumberTagD(LNumberTagD* instr) {
     __ Branch(deferred->entry());
   }
   __ bind(deferred->exit());
-  __ Addu(at, reg, -kHeapObjectTag);
-  __ sdc1(input_reg, MemOperand(at, HeapNumber::kValueOffset));
+  __ sdc1(input_reg, FieldMemOperand(reg, HeapNumber::kValueOffset));
 }
 
 
@@ -3864,15 +3857,13 @@ void LCodeGen::EmitNumberUntagD(Register input_reg,
 
     // Convert undefined to NaN.
     __ LoadRoot(at, Heap::kNanValueRootIndex);
-    __ Addu(at, at, -kHeapObjectTag);
-    __ ldc1(result_reg, MemOperand(at, HeapNumber::kValueOffset));
+    __ ldc1(result_reg, FieldMemOperand(at, HeapNumber::kValueOffset));
     __ Branch(&done);
 
     __ bind(&heap_number);
   }
   // Heap number to double register conversion.
-  __ Addu(at, input_reg, -kHeapObjectTag);
-  __ ldc1(result_reg, MemOperand(at, HeapNumber::kValueOffset));
+  __ ldc1(result_reg, FieldMemOperand(input_reg, HeapNumber::kValueOffset));
   __ Branch(&done);
 
   // Smi to double register conversion
@@ -3932,8 +3923,9 @@ void LCodeGen::DoDeferredTaggedToI(LTaggedToI* instr) {
     __ Branch(&done);
 
     __ bind(&heap_number);
-    __ Addu(scratch1, input_reg, -kHeapObjectTag);
-    __ ldc1(double_scratch2, MemOperand(scratch1, HeapNumber::kValueOffset));
+    __ ldc1(double_scratch2,
+            FieldMemOperand(input_reg,
+            HeapNumber::kValueOffset));
 
     __ EmitECMATruncate(input_reg,
                         double_scratch2,

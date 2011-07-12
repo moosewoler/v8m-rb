@@ -1715,8 +1715,7 @@ void LCodeGen::DoBranch(LBranch* instr) {
       __ ldr(scratch, FieldMemOperand(reg, HeapObject::kMapOffset));
       __ LoadRoot(ip, Heap::kHeapNumberMapRootIndex);
       __ Branch(&call_stub, ne, scratch, Operand(ip));
-      __ sub(ip, reg, Operand(kHeapObjectTag));
-      __ vldr(dbl_scratch, ip, HeapNumber::kValueOffset);
+      __ vldr(dbl_scratch, FieldMemOperand(reg, HeapNumber::kValueOffset));
       __ VFPCompareAndLoadFlags(dbl_scratch, 0.0, scratch);
       __ and_(ip, scratch, Operand(kVFPZConditionFlagBit | kVFPVConditionFlagBit));
       __ Branch(false_label, ne, ip, Operand(0));
@@ -3161,9 +3160,7 @@ void LCodeGen::DoPower(LPower* instr) {
     __ ldr(scratch, FieldMemOperand(right_reg, HeapObject::kMapOffset));
     __ LoadRoot(ip, Heap::kHeapNumberMapRootIndex);
     DeoptimizeIf(ne, instr->environment(), scratch, Operand(ip));
-    int32_t value_offset = HeapNumber::kValueOffset - kHeapObjectTag;
-    __ add(scratch, right_reg, Operand(value_offset));
-    __ vldr(result_reg, scratch, 0);
+    __ vldr(result_reg, FieldMemOperand(right_reg, HeapNumber::kValueOffset));
 
     // Prepare arguments and call C function.
     __ bind(&call);
@@ -3576,8 +3573,7 @@ void LCodeGen::DoStringCharCodeAt(LStringCharCodeAt* instr) {
   } else {
     __ lsl(scratch, index, 1);
     __ add(scratch, scratch, string);
-    __ ldrh(result, MemOperand(scratch,
-                               SeqTwoByteString::kHeaderSize - kHeapObjectTag));
+    __ ldrh(result, FieldMemOperand(scratch, SeqTwoByteString::kHeaderSize));
   }
   __ jmp(&done);
 
@@ -3589,8 +3585,7 @@ void LCodeGen::DoStringCharCodeAt(LStringCharCodeAt* instr) {
                                     SeqAsciiString::kHeaderSize + const_index));
   } else {
     __ add(scratch, string, index);
-    __ ldrb(result, MemOperand(scratch,
-                               SeqAsciiString::kHeaderSize - kHeapObjectTag));
+    __ ldrb(result, FieldMemOperand(scratch, SeqAsciiString::kHeaderSize));
 
   }
   __ bind(&done);
@@ -3755,8 +3750,7 @@ void LCodeGen::DoDeferredNumberTagI(LNumberTagI* instr) {
   // Done. Put the value in dbl_scratch into the value of the allocated heap
   // number.
   __ bind(&done);
-  __ sub(ip, reg, Operand(kHeapObjectTag));
-  __ vstr(dbl_scratch, ip, HeapNumber::kValueOffset);
+  __ vstr(dbl_scratch, FieldMemOperand(reg, HeapNumber::kValueOffset));
   __ StoreToSafepointRegisterSlot(reg, reg);
 }
 
@@ -3785,8 +3779,7 @@ void LCodeGen::DoNumberTagD(LNumberTagD* instr) {
     __ jmp(deferred->entry());
   }
   __ bind(deferred->exit());
-  __ sub(ip, reg, Operand(kHeapObjectTag));
-  __ vstr(input_reg, ip, HeapNumber::kValueOffset);
+  __ vstr(input_reg, FieldMemOperand(reg, HeapNumber::kValueOffset));
 }
 
 
@@ -3851,15 +3844,13 @@ void LCodeGen::EmitNumberUntagD(Register input_reg,
 
     // Convert undefined to NaN.
     __ LoadRoot(ip, Heap::kNanValueRootIndex);
-    __ sub(ip, ip, Operand(kHeapObjectTag));
-    __ vldr(result_reg, ip, HeapNumber::kValueOffset);
+    __ vldr(result_reg, FieldMemOperand(ip, HeapNumber::kValueOffset));
     __ jmp(&done);
 
     __ bind(&heap_number);
   }
   // Heap number to double register conversion.
-  __ sub(ip, input_reg, Operand(kHeapObjectTag));
-  __ vldr(result_reg, ip, HeapNumber::kValueOffset);
+  __ vldr(result_reg, FieldMemOperand(input_reg, HeapNumber::kValueOffset));
   __ jmp(&done);
 
   // Smi to double register conversion
@@ -3919,8 +3910,7 @@ void LCodeGen::DoDeferredTaggedToI(LTaggedToI* instr) {
     __ b(&done);
 
     __ bind(&heap_number);
-    __ sub(scratch1, input_reg, Operand(kHeapObjectTag));
-    __ vldr(double_scratch2, scratch1, HeapNumber::kValueOffset);
+    __ vldr(double_scratch2, FieldMemOperand(input_reg, HeapNumber::kValueOffset));
 
     __ EmitECMATruncate(input_reg,
                         double_scratch2,
