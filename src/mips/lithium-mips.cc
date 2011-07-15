@@ -779,7 +779,10 @@ LOperand* LChunkBuilder::FixedTemp(Register reg) {
 }
 
 
-LOperand* LChunkBuilder::FixedTemp(DoubleRegister reg) {
+LOperand* LChunkBuilder::FixedDoubleTemp(int temp_index) {
+  // temp_index is 1 for first temp from allocatable DoubleRegisters, 2 for 2nd
+  DoubleRegister reg = DoubleRegister::FromAllocationIndex(
+      DoubleRegister::kNumAllocatableRegisters - temp_index);
   LUnallocated* operand = ToUnallocated(reg);
   allocator_->RecordTemporary(operand);
   return operand;
@@ -1280,8 +1283,8 @@ LInstruction* LChunkBuilder::DoMod(HMod* instr) {
       mod = new LModI(dividend,
                       divisor,
                       TempRegister(),
-                      FixedTemp(f20),
-                      FixedTemp(f22));
+                      FixedDoubleTemp(2),
+                      FixedDoubleTemp(1));
     }
 
     if (instr->CheckFlag(HValue::kBailoutOnMinusZero) ||
@@ -1579,7 +1582,7 @@ LInstruction* LChunkBuilder::DoChange(HChange* instr) {
         LOperand* temp1 = TempRegister();
         LOperand* temp2 = instr->CanTruncateToInt32() ? TempRegister()
                                                       : NULL;
-        LOperand* temp3 = instr->CanTruncateToInt32() ? FixedTemp(f22)
+        LOperand* temp3 = instr->CanTruncateToInt32() ? FixedDoubleTemp(1)
                                                       : NULL;
         res = DefineSameAsFirst(new LTaggedToI(value, temp1, temp2, temp3));
         res = AssignEnvironment(res);
@@ -1674,14 +1677,14 @@ LInstruction* LChunkBuilder::DoClampToUint8(HClampToUint8* instr) {
   LOperand* reg = UseRegister(value);
   if (input_rep.IsDouble()) {
     // Revisit this decision, here and 8 lines below.
-    return DefineAsRegister(new LClampDToUint8(reg, FixedTemp(f22)));
+    return DefineAsRegister(new LClampDToUint8(reg, FixedDoubleTemp(1)));
   } else if (input_rep.IsInteger32()) {
     return DefineAsRegister(new LClampIToUint8(reg));
   } else {
     ASSERT(input_rep.IsTagged());
     // Register allocator doesn't (yet) support allocation of double
-    // temps. Reserve f22 explicitly.
-    LClampTToUint8* result = new LClampTToUint8(reg, FixedTemp(f22));
+    // temps. Reserve a reg explicitly.
+    LClampTToUint8* result = new LClampTToUint8(reg, FixedDoubleTemp(1));
     return AssignEnvironment(DefineAsRegister(result));
   }
 }
@@ -1705,7 +1708,7 @@ LInstruction* LChunkBuilder::DoToInt32(HToInt32* instr) {
     ASSERT(input_rep.IsTagged());
     LOperand* temp1 = TempRegister();
     LOperand* temp2 = TempRegister();
-    LOperand* temp3 = FixedTemp(f22);
+    LOperand* temp3 = FixedDoubleTemp(1);
     LTaggedToI* res = new LTaggedToI(reg, temp1, temp2, temp3);
     return AssignEnvironment(DefineSameAsFirst(res));
   }

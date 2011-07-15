@@ -2090,7 +2090,8 @@ class LChunkBuilder BASE_EMBEDDED {
   // Temporary operand that must be in a register.
   MUST_USE_RESULT LUnallocated* TempRegister();
   MUST_USE_RESULT LOperand* FixedTemp(Register reg);
-  MUST_USE_RESULT LOperand* FixedTemp(DoubleRegister reg);
+  MUST_USE_RESULT LOperand* FixedDoubleTemp(int temp_index);  /* 1,2,... */
+
 
   // Methods for setting up define-use relationships.
   // Return the same instruction that they are passed.

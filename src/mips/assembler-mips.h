@@ -178,9 +178,9 @@ struct FPURegister {
   //  f28: 0.0
   //  f30: scratch register.
   static const int kNumReservedRegisters = 2;
-  static const int kNumAllocatableRegisters = kNumRegisters / 2 -
-      kNumReservedRegisters;
-
+  static const int kNumAllocatableRegisters = 4; /// kNumRegisters / 2 - kNumReservedRegisters;
+  // kNumAllocatableRegisters=4 is the practical minimum on Mips,
+  //  due to hard-coded refs to f2/f4/f6 in lithium-mips.cc
 
   static int ToAllocationIndex(FPURegister reg) {
     ASSERT(reg.code() % 2 == 0);
