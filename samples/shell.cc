@@ -119,6 +119,7 @@ class SourceGroup {
         // Ignore other options. They have been parsed already.
       } else {
         // Use all other arguments as names of files to load and run.
+        printf("\nbegin Execute filename %s\n", arg);
         v8::HandleScope handle_scope;
         v8::Handle<v8::String> file_name = v8::String::New(arg);
         v8::Handle<v8::String> source = ReadFile(arg);
@@ -130,6 +131,7 @@ class SourceGroup {
           ExitShell(1);
           return;
         }
+        printf("ended Execute filename %s\n", arg);
       }
     }
   }
@@ -461,6 +463,8 @@ v8::Handle<v8::Value> Load(const v8::Arguments& args) {
     if (*file == NULL) {
       return v8::ThrowException(v8::String::New("Error loading file"));
     }
+    const char* cstr = ToCString(file);
+    printf("  Load(%s):\n", cstr);
     v8::Handle<v8::String> source = ReadFile(*file);
     if (source.IsEmpty()) {
       return v8::ThrowException(v8::String::New("Error loading file"));

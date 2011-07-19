@@ -869,10 +869,12 @@ void Simulator::Initialize(Isolate* isolate) {
   isolate->set_simulator_initialized(true);
   ::v8::internal::ExternalReference::set_redirector(isolate,
                                                     &RedirectExternalReference);
+  printf("Simulator::Initialize for another thread\n");
 }
 
 
 Simulator::Simulator(Isolate* isolate) : isolate_(isolate) {
+  printf("Simulator class created\n");
   i_cache_ = isolate_->simulator_i_cache();
   if (i_cache_ == NULL) {
     i_cache_ = new v8::internal::HashMap(&ICacheMatch);
@@ -884,6 +886,8 @@ Simulator::Simulator(Isolate* isolate) : isolate_(isolate) {
   stack_ = reinterpret_cast<char*>(malloc(stack_size_));
   pc_modified_ = false;
   icount_ = 0;
+  prev_icount = 0;
+  eoe_count = 0;
   break_count_ = 0;
   break_pc_ = NULL;
   break_instr_ = 0;
@@ -2674,6 +2678,15 @@ void Simulator::InstructionDecode(Instruction* instr) {
 }
 
 
+void Simulator::end_of_Execute() {
+  eoe_count++;
+  //printf("    end of %2d'th Simulator::Execute: %9d instrs, %9d cumulative\n",
+  //       eoe_count, icount_ - prev_icount, icount_);
+  //if (eoe_count >= 38)
+  //  V8_Fatal(__FILE__, __LINE__, "get gdb stack trace");
+  prev_icount = icount_;
+}
+
 
 void Simulator::Execute() {
   // Get the PC to simulate. Cannot use the accessor here as we need the
@@ -2703,6 +2716,7 @@ void Simulator::Execute() {
       program_counter = get_pc();
     }
   }
+  end_of_Execute();
 }
 
 

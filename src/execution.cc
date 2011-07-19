@@ -126,6 +126,9 @@ static Handle<Object> Invoke(bool construct,
   value->Verify();
 #endif
 
+  printf("    %9d cum. instrs executed\n",
+         Simulator::current(Isolate::Current())->icount_);
+
   // Update the pending exception flag and return the value.
   *has_pending_exception = value->IsException();
   ASSERT(*has_pending_exception == Isolate::Current()->has_pending_exception());
