@@ -1584,7 +1584,7 @@ bool Simulator::IsWatchpoint(uint32_t code) {
 void Simulator::PrintWatchpoint(uint32_t code) {
   MipsDebugger dbg(this);
   ++break_count_;
-  PrintF("\n---- break %d marker: %3d  (instr count: %8d) ----------"
+  PrintF("\n---- break %d marker: %3d  (instr count: %8lu) ----------"
          "----------------------------------",
          code, break_count_, icount_);
   dbg.PrintAllRegs();  // Print registers and continue running.

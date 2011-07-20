@@ -229,8 +229,8 @@ class Simulator {
   // below (bad_ra, end_sim_pc).
   bool has_bad_pc() const;
 
-  int icount_;
-  int prev_icount;
+  long icount_;
+  long prev_icount;
   int eoe_count;
   void end_of_Execute();
 

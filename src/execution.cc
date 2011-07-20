@@ -126,7 +126,7 @@ static Handle<Object> Invoke(bool construct,
   value->Verify();
 #endif
 
-  printf("    %9d cum. instrs executed\n",
+  printf("    %10lu cum. instrs executed\n",
          Simulator::current(Isolate::Current())->icount_);
 
   // Update the pending exception flag and return the value.
