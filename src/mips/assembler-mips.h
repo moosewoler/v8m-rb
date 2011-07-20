@@ -73,6 +73,7 @@ namespace internal {
 struct Register {
   static const int kNumRegisters = v8::internal::kNumRegisters;
   static const int kNumAllocatableRegisters = 14;  // v0 through t7.
+  // kNumAllocatableRegisters=6 is the practical minimum on Mips.
   static const int kSizeInBytes = 4;
 
   static int ToAllocationIndex(Register reg) {
