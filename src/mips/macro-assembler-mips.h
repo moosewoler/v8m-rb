@@ -273,6 +273,16 @@ class MacroAssembler: public Assembler {
                               Register scratch,
                               Label* miss);
 
+
+  void LoadFromNumberDictionary(Label* miss,
+                                Register elements,
+                                Register key,
+                                Register result,
+                                Register reg0,
+                                Register reg1,
+                                Register reg2);
+
+
   inline void MarkCode(NopMarkerTypes type) {
     nop(type);
   }
@@ -520,17 +530,20 @@ class MacroAssembler: public Assembler {
   void Ins(Register rt, Register rs, uint16_t pos, uint16_t size);
   void Ext(Register rt, Register rs, uint16_t pos, uint16_t size);
 
+  // Flush the I-cache from asm code. You should use CPU::FlushICache from C.
+  // Does not handle errors.
+  void FlushICache(Register address, unsigned instructions);
 
   // ---------------------------------------------------------------------------
   // FPU macros.
 
   // Convert unsigned word to double.
-  void Cvt_d_uw(FPURegister fd, FPURegister fs);
-  void Cvt_d_uw(FPURegister fd, Register rs);
+  void Cvt_d_uw(FPURegister fd, FPURegister fs, FPURegister scratch);
+  void Cvt_d_uw(FPURegister fd, Register rs, FPURegister scratch);
 
   // Convert double to unsigned word.
-  void Trunc_uw_d(FPURegister fd, FPURegister fs);
-  void Trunc_uw_d(FPURegister fd, Register rs);
+  void Trunc_uw_d(FPURegister fd, FPURegister fs, FPURegister scratch);
+  void Trunc_uw_d(FPURegister fd, Register rs, FPURegister scratch);
 
   // Wrapper function for the different cmp/branch types.
   void BranchF(Label* target,
@@ -1127,6 +1140,13 @@ class MacroAssembler: public Assembler {
                                            Register scratch2,
                                            Label* failure);
 
+  // ---------------------------------------------------------------------------
+  // Patching helpers.
+
+  // Patch the relocated value (lui/ori pair).
+  void PatchRelocatedValue(Register li_location,
+                           Register scratch,
+                           Register new_value);
 
   void ClampUint8(Register output_reg, Register input_reg);
 

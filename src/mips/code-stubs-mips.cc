@@ -305,12 +305,6 @@ class ConvertToDoubleStub : public CodeStub {
   }
 
   void Generate(MacroAssembler* masm);
-
-  const char* GetName() { return "ConvertToDoubleStub"; }
-
-#ifdef DEBUG
-  void Print() { PrintF("ConvertToDoubleStub\n"); }
-#endif
 };
 
 
@@ -1785,25 +1779,17 @@ void ToBooleanStub::Generate(MacroAssembler* masm) {
 }
 
 
-const char* UnaryOpStub::GetName() {
-  if (name_ != NULL) return name_;
-  const int kMaxNameLength = 100;
-  name_ = Isolate::Current()->bootstrapper()->AllocateAutoDeletedArray(
-      kMaxNameLength);
-  if (name_ == NULL) return "OOM";
+void UnaryOpStub::PrintName(StringStream* stream) {
   const char* op_name = Token::Name(op_);
   const char* overwrite_name = NULL;  // Make g++ happy.
   switch (mode_) {
     case UNARY_NO_OVERWRITE: overwrite_name = "Alloc"; break;
     case UNARY_OVERWRITE: overwrite_name = "Overwrite"; break;
   }
-
-  OS::SNPrintF(Vector<char>(name_, kMaxNameLength),
-               "UnaryOpStub_%s_%s_%s",
-               op_name,
-               overwrite_name,
-               UnaryOpIC::GetName(operand_type_));
-  return name_;
+  stream->Add("UnaryOpStub_%s_%s_%s",
+              op_name,
+              overwrite_name,
+              UnaryOpIC::GetName(operand_type_));
 }
 
 
@@ -2142,12 +2128,7 @@ void BinaryOpStub::Generate(MacroAssembler* masm) {
 }
 
 
-const char* BinaryOpStub::GetName() {
-  if (name_ != NULL) return name_;
-  const int kMaxNameLength = 100;
-  name_ = Isolate::Current()->bootstrapper()->AllocateAutoDeletedArray(
-      kMaxNameLength);
-  if (name_ == NULL) return "OOM";
+void BinaryOpStub::PrintName(StringStream* stream) {
   const char* op_name = Token::Name(op_);
   const char* overwrite_name;
   switch (mode_) {
@@ -2156,13 +2137,10 @@ const char* BinaryOpStub::GetName() {
     case OVERWRITE_LEFT: overwrite_name = "OverwriteLeft"; break;
     default: overwrite_name = "UnknownOverwrite"; break;
   }
-
-  OS::SNPrintF(Vector<char>(name_, kMaxNameLength),
-               "BinaryOpStub_%s_%s_%s",
-               op_name,
-               overwrite_name,
-               BinaryOpIC::GetName(operands_type_));
-  return name_;
+  stream->Add("BinaryOpStub_%s_%s_%s",
+              op_name,
+              overwrite_name,
+              BinaryOpIC::GetName(operands_type_));
 }
 
 
@@ -2510,7 +2488,7 @@ void BinaryOpStub::GenerateFPOperation(MacroAssembler* masm,
         CpuFeatures::Scope scope(FPU);
         __ mtc1(a2, f0);
         if (op_ == Token::SHR) {
-          __ Cvt_d_uw(f0, f0);
+          __ Cvt_d_uw(f0, f0, f22);
         } else {
           __ cvt_d_w(f0, f0);
         }
@@ -2914,7 +2892,7 @@ void BinaryOpStub::GenerateInt32Stub(MacroAssembler* masm) {
         } else {
           // The result must be interpreted as an unsigned 32-bit integer.
           __ mtc1(a2, double_scratch);
-          __ Cvt_d_uw(double_scratch, double_scratch);
+          __ Cvt_d_uw(double_scratch, double_scratch, single_scratch);
         }
 
         // Store the result.
@@ -3734,24 +3712,22 @@ void JSEntryStub::GenerateBody(MacroAssembler* masm, bool is_construct) {
   // 4 args slots
   // args
 
-  #ifdef ENABLE_LOGGING_AND_PROFILING
-    // If this is the outermost JS call, set js_entry_sp value.
-    Label non_outermost_js;
-    ExternalReference js_entry_sp(Isolate::k_js_entry_sp_address,
-                                  masm->isolate());
-    __ li(t1, Operand(ExternalReference(js_entry_sp)));
-    __ lw(t2, MemOperand(t1));
-    __ Branch(&non_outermost_js, ne, t2, Operand(zero_reg));
-    __ sw(fp, MemOperand(t1));
-    __ li(t0, Operand(Smi::FromInt(StackFrame::OUTERMOST_JSENTRY_FRAME)));
-    Label cont;
-    __ b(&cont);
-    __ nop();   // Branch delay slot nop.
-    __ bind(&non_outermost_js);
-    __ li(t0, Operand(Smi::FromInt(StackFrame::INNER_JSENTRY_FRAME)));
-    __ bind(&cont);
-    __ push(t0);
-  #endif
+  // If this is the outermost JS call, set js_entry_sp value.
+  Label non_outermost_js;
+  ExternalReference js_entry_sp(Isolate::k_js_entry_sp_address,
+                                masm->isolate());
+  __ li(t1, Operand(ExternalReference(js_entry_sp)));
+  __ lw(t2, MemOperand(t1));
+  __ Branch(&non_outermost_js, ne, t2, Operand(zero_reg));
+  __ sw(fp, MemOperand(t1));
+  __ li(t0, Operand(Smi::FromInt(StackFrame::OUTERMOST_JSENTRY_FRAME)));
+  Label cont;
+  __ b(&cont);
+  __ nop();   // Branch delay slot nop.
+  __ bind(&non_outermost_js);
+  __ li(t0, Operand(Smi::FromInt(StackFrame::INNER_JSENTRY_FRAME)));
+  __ bind(&cont);
+  __ push(t0);
 
   // Call a faked try-block that does the invoke.
   __ bal(&invoke);  // bal exposes branch delay slot.
@@ -3820,16 +3796,14 @@ void JSEntryStub::GenerateBody(MacroAssembler* masm, bool is_construct) {
   __ PopTryHandler();
 
   __ bind(&exit);  // v0 holds result
-  #ifdef ENABLE_LOGGING_AND_PROFILING
-    // Check if the current stack frame is marked as the outermost JS frame.
-    Label non_outermost_js_2;
-    __ pop(t1);
-    __ Branch(&non_outermost_js_2, ne, t1,
-              Operand(Smi::FromInt(StackFrame::OUTERMOST_JSENTRY_FRAME)));
-    __ li(t1, Operand(ExternalReference(js_entry_sp)));
-    __ sw(zero_reg, MemOperand(t1));
-    __ bind(&non_outermost_js_2);
-  #endif
+  // Check if the current stack frame is marked as the outermost JS frame.
+  Label non_outermost_js_2;
+  __ pop(t1);
+  __ Branch(&non_outermost_js_2, ne, t1,
+            Operand(Smi::FromInt(StackFrame::OUTERMOST_JSENTRY_FRAME)));
+  __ li(t1, Operand(ExternalReference(js_entry_sp)));
+  __ sw(zero_reg, MemOperand(t1));
+  __ bind(&non_outermost_js_2);
 
   // Restore the top frame descriptors from the stack.
   __ pop(t1);
@@ -3852,11 +3826,10 @@ void JSEntryStub::GenerateBody(MacroAssembler* masm, bool is_construct) {
 // * object: a0 or at sp + 1 * kPointerSize.
 // * function: a1 or at sp.
 //
-// Inlined call site patching is a crankshaft-specific feature that is not
-// implemented on MIPS.
+// An inlined call site may have been generated before calling this stub.
+// In this case the offset to the inline site to patch is passed on the stack,
+// in the safepoint slot for register t0.
 void InstanceofStub::Generate(MacroAssembler* masm) {
-  // This is a crankshaft-specific feature that has not been implemented yet.
-  ASSERT(!HasCallSiteInlineCheck());
   // Call site inlining and patching implies arguments in registers.
   ASSERT(HasArgsInRegisters() || !HasCallSiteInlineCheck());
   // ReturnTrueFalse is only implemented for inlined call sites.
@@ -3869,6 +3842,8 @@ void InstanceofStub::Generate(MacroAssembler* masm) {
   const Register prototype = t0;  // Prototype of the function.
   const Register inline_site = t5;
   const Register scratch = a2;
+
+  const int32_t kDeltaToLoadBoolResult = 4 * kPointerSize;
 
   Label slow, loop, is_instance, is_not_instance, not_js_object;
 
@@ -3885,10 +3860,10 @@ void InstanceofStub::Generate(MacroAssembler* masm) {
   // real lookup and update the call site cache.
   if (!HasCallSiteInlineCheck()) {
     Label miss;
-    __ LoadRoot(t1, Heap::kInstanceofCacheFunctionRootIndex);
-    __ Branch(&miss, ne, function, Operand(t1));
-    __ LoadRoot(t1, Heap::kInstanceofCacheMapRootIndex);
-    __ Branch(&miss, ne, map, Operand(t1));
+    __ LoadRoot(at, Heap::kInstanceofCacheFunctionRootIndex);
+    __ Branch(&miss, ne, function, Operand(at));
+    __ LoadRoot(at, Heap::kInstanceofCacheMapRootIndex);
+    __ Branch(&miss, ne, map, Operand(at));
     __ LoadRoot(v0, Heap::kInstanceofCacheAnswerRootIndex);
     __ DropAndRet(HasArgsInRegisters() ? 0 : 2);
 
@@ -3908,7 +3883,15 @@ void InstanceofStub::Generate(MacroAssembler* masm) {
     __ StoreRoot(function, Heap::kInstanceofCacheFunctionRootIndex);
     __ StoreRoot(map, Heap::kInstanceofCacheMapRootIndex);
   } else {
-    UNIMPLEMENTED_MIPS();
+    ASSERT(HasArgsInRegisters());
+    // Patch the (relocated) inlined map check.
+
+    // The offset was stored in t0 safepoint slot.
+    // (See LCodeGen::DoDeferredLInstanceOfKnownGlobal)
+    __ LoadFromSafepointRegisterSlot(scratch, t0);
+    __ Subu(inline_site, ra, scratch);
+    // Patch the relocated value to map.
+    __ PatchRelocatedValue(inline_site, scratch, map);
   }
 
   // Register mapping: a3 is object map and t0 is function prototype.
@@ -3934,7 +3917,16 @@ void InstanceofStub::Generate(MacroAssembler* masm) {
     __ mov(v0, zero_reg);
     __ StoreRoot(v0, Heap::kInstanceofCacheAnswerRootIndex);
   } else {
-    UNIMPLEMENTED_MIPS();
+    // Patch the call site to return true.
+    __ LoadRoot(v0, Heap::kTrueValueRootIndex);
+    __ Addu(inline_site, inline_site, Operand(kDeltaToLoadBoolResult));
+    // Get the boolean result location in scratch and patch it.
+    __ PatchRelocatedValue(inline_site, scratch, v0);
+
+    if (!ReturnTrueFalseObject()) {
+      ASSERT_EQ(Smi::FromInt(0), 0);
+      __ mov(v0, zero_reg);
+    }
   }
   __ DropAndRet(HasArgsInRegisters() ? 0 : 2);
 
@@ -3943,8 +3935,17 @@ void InstanceofStub::Generate(MacroAssembler* masm) {
     __ li(v0, Operand(Smi::FromInt(1)));
     __ StoreRoot(v0, Heap::kInstanceofCacheAnswerRootIndex);
   } else {
-    UNIMPLEMENTED_MIPS();
+    // Patch the call site to return false.
+    __ LoadRoot(v0, Heap::kFalseValueRootIndex);
+    __ Addu(inline_site, inline_site, Operand(kDeltaToLoadBoolResult));
+    // Get the boolean result location in scratch and patch it.
+    __ PatchRelocatedValue(inline_site, scratch, v0);
+
+    if (!ReturnTrueFalseObject()) {
+      __ li(v0, Operand(Smi::FromInt(1)));
+    }
   }
+
   __ DropAndRet(HasArgsInRegisters() ? 0 : 2);
 
   Label object_not_null, object_not_null_or_smi;
@@ -4924,6 +4925,7 @@ void CallFunctionStub::Generate(MacroAssembler* masm) {
   __ li(a0, Operand(argc_));  // Setup the number of arguments.
   __ mov(a2, zero_reg);
   __ GetBuiltinEntry(a3, Builtins::CALL_NON_FUNCTION);
+  __ SetCallKind(t1, CALL_AS_METHOD);
   __ Jump(masm->isolate()->builtins()->ArgumentsAdaptorTrampoline(),
           RelocInfo::CODE_TARGET);
 }
@@ -4931,16 +4933,9 @@ void CallFunctionStub::Generate(MacroAssembler* masm) {
 
 // Unfortunately you have to run without snapshots to see most of these
 // names in the profile since most compare stubs end up in the snapshot.
-const char* CompareStub::GetName() {
+void CompareStub::PrintName(StringStream* stream) {
   ASSERT((lhs_.is(a0) && rhs_.is(a1)) ||
          (lhs_.is(a1) && rhs_.is(a0)));
-
-  if (name_ != NULL) return name_;
-  const int kMaxNameLength = 100;
-  name_ = Isolate::Current()->bootstrapper()->AllocateAutoDeletedArray(
-      kMaxNameLength);
-  if (name_ == NULL) return "OOM";
-
   const char* cc_name;
   switch (cc_) {
     case lt: cc_name = "LT"; break;
@@ -4951,40 +4946,14 @@ const char* CompareStub::GetName() {
     case ne: cc_name = "NE"; break;
     default: cc_name = "UnknownCondition"; break;
   }
-
-  const char* lhs_name = lhs_.is(a0) ? "_a0" : "_a1";
-  const char* rhs_name = rhs_.is(a0) ? "_a0" : "_a1";
-
-  const char* strict_name = "";
-  if (strict_ && (cc_ == eq || cc_ == ne)) {
-    strict_name = "_STRICT";
-  }
-
-  const char* never_nan_nan_name = "";
-  if (never_nan_nan_ && (cc_ == eq || cc_ == ne)) {
-    never_nan_nan_name = "_NO_NAN";
-  }
-
-  const char* include_number_compare_name = "";
-  if (!include_number_compare_) {
-    include_number_compare_name = "_NO_NUMBER";
-  }
-
-  const char* include_smi_compare_name = "";
-  if (!include_smi_compare_) {
-    include_smi_compare_name = "_NO_SMI";
-  }
-
-  OS::SNPrintF(Vector<char>(name_, kMaxNameLength),
-               "CompareStub_%s%s%s%s%s%s",
-               cc_name,
-               lhs_name,
-               rhs_name,
-               strict_name,
-               never_nan_nan_name,
-               include_number_compare_name,
-               include_smi_compare_name);
-  return name_;
+  bool is_equality = cc_ == eq || cc_ == ne;
+  stream->Add("CompareStub_%s", cc_name);
+  stream->Add(lhs_.is(a0) ? "_a0" : "_a1");
+  stream->Add(rhs_.is(a0) ? "_a0" : "_a1");
+  if (strict_ && is_equality) stream->Add("_STRICT");
+  if (never_nan_nan_ && is_equality) stream->Add("_NO_NAN");
+  if (!include_number_compare_) stream->Add("_NO_NUMBER");
+  if (!include_smi_compare_) stream->Add("_NO_SMI");
 }
 
 

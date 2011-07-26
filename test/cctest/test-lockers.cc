@@ -57,16 +57,6 @@ using ::v8::V8;
 namespace i = ::i;
 
 
-#if defined(V8_TARGET_ARCH_ARM)
-  static const int kNQuickThreads = 10;
-  static const int kNNormalThreads = 100;
-#elif defined (V8_TARGET_ARCH_MIPS)
-  static const int kNQuickThreads = 10;
-  static const int kNNormalThreads = 50;
-#else
-  static const int kNQuickThreads = 50;
-  static const int kNNormalThreads = 100;
-#endif
 
 
 // Migrating an isolate
@@ -217,9 +207,14 @@ static void StartJoinAndDeleteThreads(const i::List<JoinableThread*>& threads) {
 
 // Run many threads all locking on the same isolate
 TEST(IsolateLockingStress) {
-  i::List<JoinableThread*> threads(kNNormalThreads);
+#ifdef V8_TARGET_ARCH_MIPS
+  const int kNThreads = 50;
+#else
+  const int kNThreads = 100;
+#endif
+  i::List<JoinableThread*> threads(kNThreads);
   v8::Isolate* isolate = v8::Isolate::New();
-  for (int i = 0; i < kNNormalThreads; i++) {
+  for (int i = 0; i < kNThreads; i++) {
     threads.Add(new IsolateLockingThreadWithLocalContext(isolate));
   }
   StartJoinAndDeleteThreads(threads);
@@ -249,8 +244,13 @@ class IsolateNonlockingThread : public JoinableThread {
 
 // Run many threads each accessing its own isolate without locking
 TEST(MultithreadedParallelIsolates) {
-  i::List<JoinableThread*> threads(kNQuickThreads);
-  for (int i = 0; i < kNQuickThreads; i++) {
+#if defined(V8_TARGET_ARCH_ARM) || defined(V8_TARGET_ARCH_MIPS)
+  const int kNThreads = 10;
+#else
+  const int kNThreads = 50;
+#endif
+  i::List<JoinableThread*> threads(kNThreads);
+  for (int i = 0; i < kNThreads; i++) {
     threads.Add(new IsolateNonlockingThread());
   }
   StartJoinAndDeleteThreads(threads);
@@ -282,9 +282,14 @@ class IsolateNestedLockingThread : public JoinableThread {
 
 // Run  many threads with nested locks
 TEST(IsolateNestedLocking) {
+#ifdef V8_TARGET_ARCH_MIPS
+  const int kNThreads = 50;
+#else
+  const int kNThreads = 100;
+#endif
   v8::Isolate* isolate = v8::Isolate::New();
-  i::List<JoinableThread*> threads(kNNormalThreads);
-  for (int i = 0; i < kNNormalThreads; i++) {
+  i::List<JoinableThread*> threads(kNThreads);
+  for (int i = 0; i < kNThreads; i++) {
     threads.Add(new IsolateNestedLockingThread(isolate));
   }
   StartJoinAndDeleteThreads(threads);
@@ -317,10 +322,15 @@ class SeparateIsolatesLocksNonexclusiveThread : public JoinableThread {
 
 // Run parallel threads that lock and access different isolates in parallel
 TEST(SeparateIsolatesLocksNonexclusive) {
+#if defined(V8_TARGET_ARCH_ARM) || defined(V8_TARGET_ARCH_MIPS)
+  const int kNThreads = 50;
+#else
+  const int kNThreads = 100;
+#endif
   v8::Isolate* isolate1 = v8::Isolate::New();
   v8::Isolate* isolate2 = v8::Isolate::New();
-  i::List<JoinableThread*> threads(kNNormalThreads);
-  for (int i = 0; i < kNNormalThreads; i++) {
+  i::List<JoinableThread*> threads(kNThreads);
+  for (int i = 0; i < kNThreads; i++) {
     threads.Add(new SeparateIsolatesLocksNonexclusiveThread(isolate1,
                                                              isolate2));
   }
@@ -385,9 +395,14 @@ class LockerUnlockerThread : public JoinableThread {
 
 // Use unlocker inside of a Locker, multiple threads.
 TEST(LockerUnlocker) {
-  i::List<JoinableThread*> threads(kNNormalThreads);
+#if defined(V8_TARGET_ARCH_ARM) || defined(V8_TARGET_ARCH_MIPS)
+  const int kNThreads = 50;
+#else
+  const int kNThreads = 100;
+#endif
+  i::List<JoinableThread*> threads(kNThreads);
   v8::Isolate* isolate = v8::Isolate::New();
-  for (int i = 0; i < kNNormalThreads; i++) {
+  for (int i = 0; i < kNThreads; i++) {
     threads.Add(new LockerUnlockerThread(isolate));
   }
   StartJoinAndDeleteThreads(threads);
@@ -432,9 +447,14 @@ class LockTwiceAndUnlockThread : public JoinableThread {
 
 // Use Unlocker inside two Lockers.
 TEST(LockTwiceAndUnlock) {
-  i::List<JoinableThread*> threads(kNNormalThreads);
+#if defined(V8_TARGET_ARCH_ARM) || defined(V8_TARGET_ARCH_MIPS)
+  const int kNThreads = 50;
+#else
+  const int kNThreads = 100;
+#endif
+  i::List<JoinableThread*> threads(kNThreads);
   v8::Isolate* isolate = v8::Isolate::New();
-  for (int i = 0; i < kNNormalThreads; i++) {
+  for (int i = 0; i < kNThreads; i++) {
     threads.Add(new LockTwiceAndUnlockThread(isolate));
   }
   StartJoinAndDeleteThreads(threads);
@@ -547,6 +567,11 @@ class LockUnlockLockThread : public JoinableThread {
 
 // Locker inside an Unlocker inside a Locker.
 TEST(LockUnlockLockMultithreaded) {
+#ifdef V8_TARGET_ARCH_MIPS
+  const int kNThreads = 50;
+#else
+  const int kNThreads = 100;
+#endif
   v8::Isolate* isolate = v8::Isolate::New();
   Persistent<v8::Context> context;
   {
@@ -555,8 +580,8 @@ TEST(LockUnlockLockMultithreaded) {
     v8::HandleScope handle_scope;
     context = v8::Context::New();
   }
-  i::List<JoinableThread*> threads(kNNormalThreads);
-  for (int i = 0; i < kNNormalThreads; i++) {
+  i::List<JoinableThread*> threads(kNThreads);
+  for (int i = 0; i < kNThreads; i++) {
     threads.Add(new LockUnlockLockThread(isolate, context));
   }
   StartJoinAndDeleteThreads(threads);
@@ -593,14 +618,19 @@ class LockUnlockLockDefaultIsolateThread : public JoinableThread {
 
 // Locker inside an Unlocker inside a Locker for default isolate.
 TEST(LockUnlockLockDefaultIsolateMultithreaded) {
+#ifdef V8_TARGET_ARCH_MIPS
+  const int kNThreads = 50;
+#else
+  const int kNThreads = 100;
+#endif
   Persistent<v8::Context> context;
   {
     v8::Locker locker_;
     v8::HandleScope handle_scope;
     context = v8::Context::New();
   }
-  i::List<JoinableThread*> threads(kNNormalThreads);
-  for (int i = 0; i < kNNormalThreads; i++) {
+  i::List<JoinableThread*> threads(kNThreads);
+  for (int i = 0; i < kNThreads; i++) {
     threads.Add(new LockUnlockLockDefaultIsolateThread(context));
   }
   StartJoinAndDeleteThreads(threads);

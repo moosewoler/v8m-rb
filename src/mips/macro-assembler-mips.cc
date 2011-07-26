@@ -350,6 +350,114 @@ void MacroAssembler::CheckAccessGlobalProxy(Register holder_reg,
 }
 
 
+void MacroAssembler::LoadFromNumberDictionary(Label* miss,
+                                              Register elements,
+                                              Register key,
+                                              Register result,
+                                              Register reg0,
+                                              Register reg1,
+                                              Register reg2) {
+  // Register use:
+  //
+  // elements - holds the slow-case elements of the receiver on entry.
+  //            Unchanged unless 'result' is the same register.
+  //
+  // key      - holds the smi key on entry.
+  //            Unchanged unless 'result' is the same register.
+  //
+  //
+  // result   - holds the result on exit if the load succeeded.
+  //            Allowed to be the same as 'key' or 'result'.
+  //            Unchanged on bailout so 'key' or 'result' can be used
+  //            in further computation.
+  //
+  // Scratch registers:
+  //
+  // reg0 - holds the untagged key on entry and holds the hash once computed.
+  //
+  // reg1 - Used to hold the capacity mask of the dictionary.
+  //
+  // reg2 - Used for the index into the dictionary.
+  // at   - Temporary (avoid MacroAssembler instructions also using 'at').
+  Label done;
+
+  // Compute the hash code from the untagged key.  This must be kept in sync
+  // with ComputeIntegerHash in utils.h.
+  //
+  // hash = ~hash + (hash << 15);
+  nor(reg1, reg0, zero_reg);
+  sll(at, reg0, 15);
+  addu(reg0, reg1, at);
+
+  // hash = hash ^ (hash >> 12);
+  srl(at, reg0, 12);
+  xor_(reg0, reg0, at);
+
+  // hash = hash + (hash << 2);
+  sll(at, reg0, 2);
+  addu(reg0, reg0, at);
+
+  // hash = hash ^ (hash >> 4);
+  srl(at, reg0, 4);
+  xor_(reg0, reg0, at);
+
+  // hash = hash * 2057;
+  li(reg1, Operand(2057));
+  mul(reg0, reg0, reg1);
+
+  // hash = hash ^ (hash >> 16);
+  srl(at, reg0, 16);
+  xor_(reg0, reg0, at);
+
+  // Compute the capacity mask.
+  lw(reg1, FieldMemOperand(elements, NumberDictionary::kCapacityOffset));
+  sra(reg1, reg1, kSmiTagSize);
+  Subu(reg1, reg1, Operand(1));
+
+  // Generate an unrolled loop that performs a few probes before giving up.
+  static const int kProbes = 4;
+  for (int i = 0; i < kProbes; i++) {
+    // Use reg2 for index calculations and keep the hash intact in reg0.
+    mov(reg2, reg0);
+    // Compute the masked index: (hash + i + i * i) & mask.
+    if (i > 0) {
+      Addu(reg2, reg2, Operand(NumberDictionary::GetProbeOffset(i)));
+    }
+    and_(reg2, reg2, reg1);
+
+    // Scale the index by multiplying by the element size.
+    ASSERT(NumberDictionary::kEntrySize == 3);
+    sll(at, reg2, 1);  // 2x.
+    addu(reg2, reg2, at);  // reg2 = reg2 * 3.
+
+    // Check if the key is identical to the name.
+    sll(at, reg2, kPointerSizeLog2);
+    addu(reg2, elements, at);
+
+    lw(at, FieldMemOperand(reg2, NumberDictionary::kElementsStartOffset));
+    if (i != kProbes - 1) {
+      Branch(&done, eq, key, Operand(at));
+    } else {
+      Branch(miss, ne, key, Operand(at));
+    }
+  }
+
+  bind(&done);
+  // Check that the value is a normal property.
+  // reg2: elements + (index * kPointerSize).
+  const int kDetailsOffset =
+      NumberDictionary::kElementsStartOffset + 2 * kPointerSize;
+  lw(reg1, FieldMemOperand(reg2, kDetailsOffset));
+  And(at, reg1, Operand(Smi::FromInt(PropertyDetails::TypeField::mask())));
+  Branch(miss, ne, at, Operand(zero_reg));
+
+  // Get the value at the masked, scaled index and return.
+  const int kValueOffset =
+      NumberDictionary::kElementsStartOffset + kPointerSize;
+  lw(result, FieldMemOperand(reg2, kValueOffset));
+}
+
+
 // ---------------------------------------------------------------------------
 // Instruction macros.
 
@@ -676,6 +784,20 @@ void MacroAssembler::Ext(Register rt,
 }
 
 
+void MacroAssembler::FlushICache(Register address, unsigned instructions) {
+  RegList saved_regs = kJSCallerSaved | ra.bit();
+  MultiPush(saved_regs);
+
+  // Save to a0 in case address == t0.
+  Move(a0, address);
+  PrepareCallCFunction(2, t0);
+
+  li(a1, instructions * kInstrSize);
+  CallCFunction(ExternalReference::flush_icache_function(isolate()), 2);
+  MultiPop(saved_regs);
+}
+
+
 void MacroAssembler::Ins(Register rt,
                          Register rs,
                          uint16_t pos,
@@ -713,19 +835,23 @@ void MacroAssembler::Ins(Register rt,
 }
 
 
-void MacroAssembler::Cvt_d_uw(FPURegister fd, FPURegister fs) {
+void MacroAssembler::Cvt_d_uw(FPURegister fd,
+                              FPURegister fs,
+                              FPURegister scratch) {
   // Move the data from fs to t8.
   mfc1(t8, fs);
-  Cvt_d_uw(fd, t8);
+  Cvt_d_uw(fd, t8, scratch);
 }
 
 
-void MacroAssembler::Cvt_d_uw(FPURegister fd, Register rs) {
+void MacroAssembler::Cvt_d_uw(FPURegister fd,
+                              Register rs,
+                              FPURegister scratch) {
   // Convert rs to a FP value in fd (and fd + 1).
   // We do this by converting rs minus the MSB to avoid sign conversion,
   // then adding 2^31 to the result (if needed).
 
-  ASSERT(!fd.is(f20));
+  ASSERT(!fd.is(scratch));
   ASSERT(!rs.is(t9));
   ASSERT(!rs.is(at));
 
@@ -747,50 +873,54 @@ void MacroAssembler::Cvt_d_uw(FPURegister fd, Register rs) {
 
   // Load 2^31 into f20 as its float representation.
   li(at, 0x41E00000);
-  mtc1(at, f21);
-  mtc1(zero_reg, f20);
+  mtc1(at, FPURegister::from_code(scratch.code() + 1));
+  mtc1(zero_reg, scratch);
   // Add it to fd.
-  add_d(fd, fd, f20);
+  add_d(fd, fd, scratch);
 
   bind(&conversion_done);
 }
 
 
-void MacroAssembler::Trunc_uw_d(FPURegister fd, FPURegister fs) {
-  Trunc_uw_d(fs, t8);
+void MacroAssembler::Trunc_uw_d(FPURegister fd,
+                                FPURegister fs,
+                                FPURegister scratch) {
+  Trunc_uw_d(fs, t8, scratch);
   mtc1(t8, fd);
 }
 
 
-void MacroAssembler::Trunc_uw_d(FPURegister fd, Register rs) {
-  ASSERT(!fd.is(f22));
+void MacroAssembler::Trunc_uw_d(FPURegister fd,
+                                Register rs,
+                                FPURegister scratch) {
+  ASSERT(!fd.is(scratch));
   ASSERT(!rs.is(at));
 
-  // Load 2^31 into f22 as its float representation.
+  // Load 2^31 into scratch as its float representation.
   li(at, 0x41E00000);
-  mtc1(at, f23);
-  mtc1(zero_reg, f22);
-  // Test if f22 > fd.
+  mtc1(at, FPURegister::from_code(scratch.code() + 1));
+  mtc1(zero_reg, scratch);
+  // Test if scratch > fd.
   // If fd < 2^31 we can convert it normally.
   Label simple_convert;
   // TODO(kalmard): the fd == NaN case is not covered in this function.
   // We could toggle the appropriate FSCR bit but this function is rarely used
   // (if at all) and never in such an environment.
-  BranchF(&simple_convert, NULL, lt, fd, f22);
+  BranchF(&simple_convert, NULL, lt, fd, scratch);
 
   // First we subtract 2^31 from fd, then trunc it to rs
   // and add 2^31 to rs.
-  sub_d(f22, fd, f22);
-  trunc_w_d(f22, f22);
-  mfc1(rs, f22);
+  sub_d(scratch, fd, scratch);
+  trunc_w_d(scratch, scratch);
+  mfc1(rs, scratch);
   Or(rs, rs, 1 << 31);
 
   Label done;
   Branch(&done);
   // Simple conversion.
   bind(&simple_convert);
-  trunc_w_d(f22, fd);
-  mfc1(rs, f22);
+  trunc_w_d(scratch, fd);
+  mfc1(rs, scratch);
 
   bind(&done);
 }
@@ -2121,8 +2251,7 @@ void MacroAssembler::Call(Handle<Code> code,
   bind(&start);
   ASSERT(RelocInfo::IsCodeTarget(rmode));
   if (rmode == RelocInfo::CODE_TARGET && ast_id != kNoASTId) {
-    ASSERT(ast_id_for_reloc_info_ == kNoASTId);
-    ast_id_for_reloc_info_ = ast_id;
+    SetRecordedAstId(ast_id);
     rmode = RelocInfo::CODE_TARGET_WITH_ID;
   }
   Call(reinterpret_cast<Address>(code.location()), rmode, cond, rs, rt, bd);
@@ -3755,6 +3884,8 @@ void MacroAssembler::AssertFastElements(Register elements) {
     lw(elements, FieldMemOperand(elements, HeapObject::kMapOffset));
     LoadRoot(at, Heap::kFixedArrayMapRootIndex);
     Branch(&ok, eq, elements, Operand(at));
+    LoadRoot(at, Heap::kFixedDoubleArrayMapRootIndex);
+    Branch(&ok, eq, elements, Operand(at));
     LoadRoot(at, Heap::kFixedCOWArrayMapRootIndex);
     Branch(&ok, eq, elements, Operand(at));
     Abort("JSObject with fast elements map has slow elements");
@@ -4328,6 +4459,37 @@ void MacroAssembler::LoadInstanceDescriptors(Register map,
   JumpIfNotSmi(descriptors, &not_smi);
   li(descriptors, Operand(FACTORY->empty_descriptor_array()));
   bind(&not_smi);
+}
+
+
+void MacroAssembler::PatchRelocatedValue(Register li_location,
+                                         Register scratch,
+                                         Register new_value) {
+  lw(scratch, MemOperand(li_location));
+  // At this point scratch is a lui(at, ...) instruction.
+  if (emit_debug_code()) {
+    And(scratch, scratch, kOpcodeMask);
+    Check(eq, "The instruction to patch should be a lui.",
+        scratch, Operand(LUI));
+    lw(scratch, MemOperand(li_location));
+  }
+  srl(t9, new_value, kImm16Bits);
+  Ins(scratch, t9, 0, kImm16Bits);
+  sw(scratch, MemOperand(li_location));
+
+  lw(scratch, MemOperand(li_location, kInstrSize));
+  // scratch is now ori(at, ...).
+  if (emit_debug_code()) {
+    And(scratch, scratch, kOpcodeMask);
+    Check(eq, "The instruction to patch should be an ori.",
+        scratch, Operand(ORI));
+    lw(scratch, MemOperand(li_location, kInstrSize));
+  }
+  Ins(scratch, new_value, 0, kImm16Bits);
+  sw(scratch, MemOperand(li_location, kInstrSize));
+
+  // Update the I-cache so the new lui and ori can be executed.
+  FlushICache(li_location, 2);
 }
 
 
