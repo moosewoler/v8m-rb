@@ -51,7 +51,8 @@ bool SafepointEntry::HasRegisters() const {
 
 bool SafepointEntry::HasRegisterAt(int reg_index) const {
   ASSERT(is_valid());
-  ASSERT(reg_index >= 0 && reg_index < kNumSafepointRegisters);
+  ASSERT(reg_index >= 0 && reg_index < kNumSafepointRegisters &&
+         (kSafepointSavedRegisters & (1 << reg_index)) != 0);
   int byte_index = reg_index >> kBitsPerByteLog2;
   int bit_index = reg_index & (kBitsPerByte - 1);
   return (bits_[byte_index] & (1 << bit_index)) != 0;
@@ -117,7 +118,10 @@ void SafepointTable::PrintBits(uint8_t byte, int digits) {
 
 
 void Safepoint::DefinePointerRegister(Register reg) {
-  registers_->Add(reg.code());
+  int r = reg.code();
+  ASSERT(0 <= r && r < kNumSafepointRegisters &&
+         (kSafepointSavedRegisters & (1 << r)) != 0);
+  registers_->Add(r);
 }
 
 
@@ -198,7 +202,8 @@ void SafepointTableBuilder::Emit(Assembler* assembler, int bits_per_entry) {
     } else {
       for (int j = 0; j < registers->length(); j++) {
         int index = registers->at(j);
-        ASSERT(index >= 0 && index < kNumSafepointRegisters);
+        ASSERT(index >= 0 && index < kNumSafepointRegisters &&
+               (kSafepointSavedRegisters & (1 << index)) != 0);
         int byte_index = index >> kBitsPerByteLog2;
         int bit_index = index & (kBitsPerByte - 1);
         bits[byte_index] |= (1 << bit_index);

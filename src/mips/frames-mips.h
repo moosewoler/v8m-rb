@@ -77,10 +77,12 @@ static const RegList kCalleeSaved =
 
 static const int kNumCalleeSaved = 9;
 
-// Number of registers for which space is reserved in safepoints. Must be a
-// multiple of 8.
+// Highest register +1 for which space is reserved in safepoints.
+// Currently must be a multiple of kBitsPerByte, due to missing roundups
+//  in various byte loops over bit-per-register safepoint masks.
 // TODO(mips): Only 8 registers may actually be sufficient. Revisit.
 static const int kNumSafepointRegisters = 24;
+// TODO(duanes): fp/s8 is omitted; a harmless accident?
 
 // Define the list of registers actually saved at safepoints.
 // Note that the number of saved registers may be smaller than the reserved
@@ -124,8 +126,8 @@ static const int kSafepointRegisterStackIndexMap[kNumRegs] = {
   kUndefIndex,  // k1
   kUndefIndex,  // gp
   22,  // sp
-  23,  // fp
-  kUndefIndex
+  23,  // fp/s8
+  kUndefIndex   // ra
 };
 
 

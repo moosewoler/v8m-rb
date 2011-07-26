@@ -138,6 +138,7 @@ static void Generate_DebugBreakCallHelper(MacroAssembler* masm,
       Register reg = { r };
       if ((non_object_regs & (1 << r)) != 0) {
         if (FLAG_debug_code) {
+          // TODO(duanes): This is too strict, excludes small neg values.
           __ And(at, reg, 0xc0000000);
           __ Assert(eq, "Unable to encode value as smi", at, Operand(zero_reg));
         }
@@ -163,6 +164,7 @@ static void Generate_DebugBreakCallHelper(MacroAssembler* masm,
       int r = JSCallerSavedCode(i);
       Register reg = { r };
       if ((non_object_regs & (1 << r)) != 0) {
+        // TODO(duanes): Also handle negative SMI values.
         __ srl(reg, reg, kSmiTagSize);
       }
       if (FLAG_debug_code &&
