@@ -46,20 +46,13 @@ static const RegList kJSCallerSaved =
   1 << 5 |  // a1
   1 << 6 |  // a2
   1 << 7 |  // a3
-  1 << 8  |  // t0
-  1 << 9  |  // t1
-  1 << 10 |  // t2
-  1 << 11 |  // t3
-  1 << 12 |  // t4
-  1 << 13 |  // t5
-  1 << 14 |  // t6
-  1 << 15;   // t7
+  1 << 8;   // t0
 
-static const int kNumJSCallerSaved = 14;
+static const int kNumJSCallerSaved = 7;
 
 
 // Return the code of the n-th caller-saved register available to JavaScript
-// e.g. JSCallerSavedReg(0) returns a0.code() == 4.
+// e.g. JSCallerSavedReg(0) returns v0.code() == 2.
 int JSCallerSavedCode(int n);
 
 
@@ -92,43 +85,6 @@ static const int kNumSafepointSavedRegisters =
     kNumJSCallerSaved + kNumCalleeSaved;
 
 typedef Object* JSCallerSavedBuffer[kNumJSCallerSaved];
-
-static const int kUndefIndex = -1;
-// Map with indexes on stack that corresponds to codes of saved registers.
-static const int kSafepointRegisterStackIndexMap[kNumRegs] = {
-  kUndefIndex,  // zero_reg
-  kUndefIndex,  // at
-  0,   // v0
-  1,   // v1
-  2,   // a0
-  3,   // a1
-  4,   // a2
-  5,   // a3
-  6,   // t0
-  7,   // t1
-  8,   // t2
-  9,   // t3
-  10,  // t4
-  11,  // t5
-  12,  // t6
-  13,  // t7
-  14,  // s0
-  15,  // s1
-  16,  // s2
-  17,  // s3
-  18,  // s4
-  19,  // s5
-  20,  // s6
-  21,  // s7
-  kUndefIndex,  // t8
-  kUndefIndex,  // t9
-  kUndefIndex,  // k0
-  kUndefIndex,  // k1
-  kUndefIndex,  // gp
-  22,  // sp
-  23,  // fp/s8
-  kUndefIndex   // ra
-};
 
 
 // ----------------------------------------------------

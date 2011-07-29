@@ -51,11 +51,12 @@ bool SafepointEntry::HasRegisters() const {
 
 bool SafepointEntry::HasRegisterAt(int reg_index) const {
   ASSERT(is_valid());
-  ASSERT(reg_index >= 0 && reg_index < kNumSafepointRegisters &&
-         (kSafepointSavedRegisters & (1 << reg_index)) != 0);
+  ASSERT(reg_index >= 0 && reg_index < kNumSafepointRegisters);
   int byte_index = reg_index >> kBitsPerByteLog2;
   int bit_index = reg_index & (kBitsPerByte - 1);
-  return (bits_[byte_index] & (1 << bit_index)) != 0;
+  bool has_reg = (bits_[byte_index] & (1 << bit_index)) != 0;
+  ASSERT(!has_reg || (kSafepointSavedRegisters & (1 << reg_index)) != 0);
+  return has_reg;
 }
 
 

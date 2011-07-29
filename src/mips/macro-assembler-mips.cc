@@ -172,13 +172,17 @@ void MacroAssembler::LoadFromSafepointRegisterSlot(Register dst, Register src) {
 
 
 int MacroAssembler::SafepointRegisterStackIndex(int reg_code) {
+  // find slot position of given reg, within the pushed safepoint int registers.
   ASSERT(0 <= reg_code && reg_code < kNumSafepointRegisters &&
          (kSafepointSavedRegisters & (1 << reg_code)) != 0);
   // The registers are pushed starting with the highest encoding,
   // which means that lowest encodings are closest to the stack pointer.
-  int index = kSafepointRegisterStackIndexMap[reg_code];
-  ASSERT(0 <= index && index < kNumSafepointSavedRegisters);
-  return index;
+  int slot = 0;
+  for (int r = 0; r < reg_code; r++) {
+    slot += (kSafepointSavedRegisters >> r) & 1;
+  }
+  // TODO(duanes): Perhaps replace by table lookup.
+  return slot;
 }
 
 

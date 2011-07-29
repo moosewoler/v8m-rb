@@ -1768,18 +1768,16 @@ void LAllocator::InactiveToActive(LiveRange* range) {
 }
 
 
-// compile-time max of Register and DoubleRegister's kNumAllocatableRegisters:
-static const int kNumRegsMax = Register::kNumAllocatableRegisters;  // move this to <iset>/assembler.h
-
-
-// TryAllocateFreeReg and AllocateBlockedReg assume this
-// when allocating local arrays.
-STATIC_ASSERT(kNumRegsMax >= DoubleRegister::kNumAllocatableRegisters &&
-              kNumRegsMax >= Register::kNumAllocatableRegisters);
+static const int kNumRegsMax = Max(Register::kNumAllocatableRegisters,
+                                   DoubleRegister::kNumAllocatableRegisters);
+// Compile-time loose upper bound on kNumRegsMax, for declaring
+//    local array indexed by either Registers or DoubleRegisters:
+static const int kNumRegsLimit = Register::kNumAllocatableRegisters +
+                                 DoubleRegister::kNumAllocatableRegisters;
 
 
 bool LAllocator::TryAllocateFreeReg(LiveRange* current) {
-  LifetimePosition free_until_pos[kNumRegsMax];
+  LifetimePosition free_until_pos[kNumRegsLimit];
 
   for (int i = 0; i < kNumRegsMax; i++) {
     free_until_pos[i] = LifetimePosition::MaxPosition();
@@ -1868,9 +1866,8 @@ void LAllocator::AllocateBlockedReg(LiveRange* current) {
     return;
   }
 
-
-  LifetimePosition use_pos[kNumRegsMax];
-  LifetimePosition block_pos[kNumRegsMax];
+  LifetimePosition use_pos[kNumRegsLimit];
+  LifetimePosition block_pos[kNumRegsLimit];
 
   for (int i = 0; i < kNumRegsMax; i++) {
     use_pos[i] = block_pos[i] = LifetimePosition::MaxPosition();
