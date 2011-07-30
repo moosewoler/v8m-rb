@@ -3197,7 +3197,6 @@ void TranscendentalCacheStub::Generate(MacroAssembler* masm) {
     __ lw(t0, MemOperand(cache_entry, 0));
     __ lw(t1, MemOperand(cache_entry, 4));
     __ lw(t2, MemOperand(cache_entry, 8));
-    __ Addu(cache_entry, cache_entry, 12);
     __ Branch(&calculate, ne, a2, Operand(t0));
     __ Branch(&calculate, ne, a3, Operand(t1));
     // Cache hit. Load result, cleanup and return.
@@ -3231,6 +3230,7 @@ void TranscendentalCacheStub::Generate(MacroAssembler* masm) {
     // Register a0 holds precalculated cache entry address; preserve
     // it on the stack and pop it into register cache_entry after the
     // call.
+    __ Push(a2, a3);
     __ push(cache_entry);
     GenerateCallCFunction(masm, scratch0);
     __ GetCFunctionDoubleResult(f4);
@@ -3238,6 +3238,7 @@ void TranscendentalCacheStub::Generate(MacroAssembler* masm) {
     // Try to update the cache. If we cannot allocate a
     // heap number, we return the result without updating.
     __ pop(cache_entry);
+    __ Pop(a2, a3);
     __ LoadRoot(t1, Heap::kHeapNumberMapRootIndex);
     __ AllocateHeapNumber(t2, scratch0, scratch1, t1, &no_update);
     __ sdc1(f4, FieldMemOperand(t2, HeapNumber::kValueOffset));
@@ -3840,7 +3841,7 @@ void InstanceofStub::Generate(MacroAssembler* masm) {
   Register map = a3;  // Map of the object.
   const Register function = a1;  // Function (rhs).
   const Register prototype = t0;  // Prototype of the function.
-  const Register inline_site = t5;
+  const Register inline_site = v1;  //temp, preserved across FlushICache
   const Register scratch = a2;
 
   const int32_t kDeltaToLoadBoolResult = 4 * kPointerSize;
