@@ -3841,7 +3841,7 @@ void InstanceofStub::Generate(MacroAssembler* masm) {
   Register map = a3;  // Map of the object.
   const Register function = a1;  // Function (rhs).
   const Register prototype = t0;  // Prototype of the function.
-  const Register inline_site = t5;
+  const Register inline_site = v1;  //temp, preserved across FlushICache
   const Register scratch = a2;
 
   const int32_t kDeltaToLoadBoolResult = 4 * kPointerSize;
