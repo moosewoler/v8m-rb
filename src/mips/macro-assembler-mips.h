@@ -94,6 +94,36 @@ enum BranchDelaySlot {
   PROTECT
 };
 
+
+// -----------------------------------------------------------------------------
+// Static helper functions.
+
+static MemOperand ContextOperand(Register context, int index) {
+  return MemOperand(context, Context::SlotOffset(index));
+}
+
+
+static inline MemOperand GlobalObjectOperand()  {
+  return ContextOperand(cp, Context::GLOBAL_INDEX);
+}
+
+
+// Generate a MemOperand for loading a field from an object.
+static inline MemOperand FieldMemOperand(Register object, int offset) {
+  return MemOperand(object, offset - kHeapObjectTag);
+}
+
+
+// Generate a MemOperand for storing arguments 5..N on the stack
+// when calling CallCFunction().
+static inline MemOperand CFunctionArgumentOperand(int index) {
+  ASSERT(index > kCArgSlotCount);
+  // Argument 5 takes the slot just past the four Arg-slots.
+  int offset = (index - 5) * kPointerSize + kCArgsSlotsSize;
+  return MemOperand(sp, offset);
+}
+
+
 // MacroAssembler implements a collection of frequently used macros.
 class MacroAssembler: public Assembler {
  public:
@@ -449,6 +479,9 @@ class MacroAssembler: public Assembler {
   void MultiPush(RegList regs);
   void MultiPushReversed(RegList regs);
 
+  void MultiPushFPU(RegList regs);
+  void MultiPushReversedFPU(RegList regs);
+
   // Lower case push() for compatibility with arch-independent code.
   void push(Register src) {
     Addu(sp, sp, Operand(-kPointerSize));
@@ -494,6 +527,9 @@ class MacroAssembler: public Assembler {
   void MultiPop(RegList regs);
   void MultiPopReversed(RegList regs);
 
+  void MultiPopFPU(RegList regs);
+  void MultiPopReversedFPU(RegList regs);
+
   // Lower case pop() for compatibility with arch-independent code.
   void pop(Register dst) {
     lw(dst, MemOperand(sp, 0));
@@ -506,6 +542,14 @@ class MacroAssembler: public Assembler {
     lw(src2, MemOperand(sp, 0 * kPointerSize));
     lw(src1, MemOperand(sp, 1 * kPointerSize));
     Addu(sp, sp, 2 * kPointerSize);
+  }
+
+  // Pop three registers. Pops rightmost register first (from lower address).
+  void Pop(Register src1, Register src2, Register src3) {
+    lw(src3, MemOperand(sp, 0 * kPointerSize));
+    lw(src2, MemOperand(sp, 1 * kPointerSize));
+    lw(src1, MemOperand(sp, 2 * kPointerSize));
+    Addu(sp, sp, 3 * kPointerSize);
   }
 
   void Pop(uint32_t count = 1) {
@@ -535,7 +579,7 @@ class MacroAssembler: public Assembler {
   void FlushICache(Register address, unsigned instructions);
 
   // ---------------------------------------------------------------------------
-  // FPU macros.
+  // FPU macros. These do not handle special cases like NaN or +- inf.
 
   // Convert unsigned word to double.
   void Cvt_d_uw(FPURegister fd, FPURegister fs, FPURegister scratch);
@@ -782,6 +826,21 @@ class MacroAssembler: public Assembler {
   // Generates code for reporting that an illegal operation has
   // occurred.
   void IllegalOperation(int num_arguments);
+
+
+  // Load and check the instance type of an object for being a string.
+  // Loads the type into the second argument register.
+  // Returns a condition that will be enabled if the object was a string.
+  Condition IsObjectStringType(Register obj,
+                               Register type,
+                               Register result) {
+    lw(type, FieldMemOperand(obj, HeapObject::kMapOffset));
+    lbu(type, FieldMemOperand(type, Map::kInstanceTypeOffset));
+    And(type, type, Operand(kIsNotStringMask));
+    ASSERT_EQ(0, kStringTag);
+    return eq;
+  }
+
 
   // Picks out an array index from the hash field.
   // Register use:
@@ -1256,34 +1315,6 @@ class CodePatcher {
   MacroAssembler masm_;  // Macro assembler used to generate the code.
 };
 
-
-// -----------------------------------------------------------------------------
-// Static helper functions.
-
-static MemOperand ContextOperand(Register context, int index) {
-  return MemOperand(context, Context::SlotOffset(index));
-}
-
-
-static inline MemOperand GlobalObjectOperand()  {
-  return ContextOperand(cp, Context::GLOBAL_INDEX);
-}
-
-
-// Generate a MemOperand for loading a field from an object.
-static inline MemOperand FieldMemOperand(Register object, int offset) {
-  return MemOperand(object, offset - kHeapObjectTag);
-}
-
-
-// Generate a MemOperand for storing arguments 5..N on the stack
-// when calling CallCFunction().
-static inline MemOperand CFunctionArgumentOperand(int index) {
-  ASSERT(index > kCArgSlotCount);
-  // Argument 5 takes the slot just past the four Arg-slots.
-  int offset = (index - 5) * kPointerSize + kCArgsSlotsSize;
-  return MemOperand(sp, offset);
-}
 
 
 #ifdef GENERATED_CODE_COVERAGE

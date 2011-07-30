@@ -736,6 +736,8 @@ void HGraph::AssignDominators() {
   HPhase phase("Assign dominators", this);
   for (int i = 0; i < blocks_.length(); ++i) {
     if (blocks_[i]->IsLoopHeader()) {
+      // Only the first predecessor of a loop header is from outside the loop.
+      // All others are back edges, and thus cannot dominate the loop header.
       blocks_[i]->AssignCommonDominator(blocks_[i]->predecessors()->first());
     } else {
       for (int j = 0; j < blocks_[i]->predecessors()->length(); ++j) {
@@ -743,13 +745,15 @@ void HGraph::AssignDominators() {
       }
     }
   }
+}
 
-  // Propagate flag marking blocks containing unconditional deoptimize.
+// Mark all blocks that are dominated by an unconditional soft deoptimize to
+// prevent code motion across those blocks.
+void HGraph::PropagateDeoptimizingMark() {
+  HPhase phase("Propagate deoptimizing mark", this);
   MarkAsDeoptimizingRecursively(entry_block());
 }
 
-
-// Mark all blocks that are dominated by an unconditional deoptimize.
 void HGraph::MarkAsDeoptimizingRecursively(HBasicBlock* block) {
   for (int i = 0; i < block->dominated_blocks()->length(); ++i) {
     HBasicBlock* dominated = block->dominated_blocks()->at(i);
@@ -2158,7 +2162,9 @@ void TestContext::BuildBranch(HValue* value) {
   }
   HBasicBlock* empty_true = builder->graph()->CreateBasicBlock();
   HBasicBlock* empty_false = builder->graph()->CreateBasicBlock();
-  HBranch* test = new(zone()) HBranch(value, empty_true, empty_false);
+  unsigned test_id = condition()->test_id();
+  ToBooleanStub::Types expected(builder->oracle()->ToBooleanTypes(test_id));
+  HBranch* test = new(zone()) HBranch(value, empty_true, empty_false, expected);
   builder->current_block()->Finish(test);
 
   empty_true->Goto(if_true());
@@ -2293,6 +2299,7 @@ HGraph* HGraphBuilder::CreateGraph() {
 
   graph()->OrderBlocks();
   graph()->AssignDominators();
+  graph()->PropagateDeoptimizingMark();
   graph()->EliminateRedundantPhis();
   if (FLAG_eliminate_dead_phis) graph()->EliminateUnreachablePhis();
   if (!graph()->CollectPhis()) {
@@ -3911,7 +3918,7 @@ HInstruction* HGraphBuilder::BuildMonomorphicElementAccess(HValue* object,
   HInstruction* mapcheck = AddInstruction(new(zone()) HCheckMap(object, map));
   HInstruction* elements = AddInstruction(new(zone()) HLoadElements(object));
   bool fast_double_elements = map->has_fast_double_elements();
-  if (is_store && !fast_double_elements) {
+  if (is_store && map->has_fast_elements()) {
     AddInstruction(new(zone()) HCheckMap(
         elements, isolate()->factory()->fixed_array_map()));
   }
@@ -4022,9 +4029,10 @@ HValue* HGraphBuilder::HandlePolymorphicElementAccess(HValue* object,
           elements_kind == JSObject::FAST_DOUBLE_ELEMENTS) {
         bool fast_double_elements =
             elements_kind == JSObject::FAST_DOUBLE_ELEMENTS;
-        if (is_store && !fast_double_elements) {
+        if (is_store && elements_kind == JSObject::FAST_ELEMENTS) {
           AddInstruction(new(zone()) HCheckMap(
-              elements, isolate()->factory()->fixed_array_map()));
+              elements, isolate()->factory()->fixed_array_map(),
+              elements_kind_branch));
         }
         HBasicBlock* if_jsarray = graph()->CreateBasicBlock();
         HBasicBlock* if_fastobject = graph()->CreateBasicBlock();
@@ -5503,9 +5511,11 @@ void HGraphBuilder::VisitLogicalExpression(BinaryOperation* expr) {
     // We need an extra block to maintain edge-split form.
     HBasicBlock* empty_block = graph()->CreateBasicBlock();
     HBasicBlock* eval_right = graph()->CreateBasicBlock();
+    unsigned test_id = expr->left()->test_id();
+    ToBooleanStub::Types expected(oracle()->ToBooleanTypes(test_id));
     HBranch* test = is_logical_and
-      ? new(zone()) HBranch(Top(), eval_right, empty_block)
-      : new(zone()) HBranch(Top(), empty_block, eval_right);
+      ? new(zone()) HBranch(Top(), eval_right, empty_block, expected)
+      : new(zone()) HBranch(Top(), empty_block, eval_right, expected);
     current_block()->Finish(test);
 
     set_current_block(eval_right);

@@ -281,7 +281,7 @@ bool LCodeGen::GenerateDeferredCode() {
 bool LCodeGen::GenerateDeoptJumpTable() {
   // TODO(plind): this will need a different implementation for MIPS.
   // Skipping it for now. Raised issue #100 for this.
-  Abort("Unimplemented: %s", "EmitLoadDoubleRegister");
+  Abort("Unimplemented: %s", "GenerateDeoptJumpTable");
   return false;
 }
 
@@ -333,7 +333,29 @@ DoubleRegister LCodeGen::ToDoubleRegister(LOperand* op) const {
 DoubleRegister LCodeGen::EmitLoadDoubleRegister(LOperand* op,
                                                 FloatRegister flt_scratch,
                                                 DoubleRegister dbl_scratch) {
-  Abort("Unimplemented: %s", "EmitLoadDoubleRegister");
+  if (op->IsDoubleRegister()) {
+    return ToDoubleRegister(op->index());
+  } else if (op->IsConstantOperand()) {
+    LConstantOperand* const_op = LConstantOperand::cast(op);
+    Handle<Object> literal = chunk_->LookupLiteral(const_op);
+    Representation r = chunk_->LookupLiteralRepresentation(const_op);
+    if (r.IsInteger32()) {
+      ASSERT(literal->IsNumber());
+      __ li(at, Operand(static_cast<int32_t>(literal->Number())));
+      __ mtc1(at, flt_scratch);
+      __ cvt_d_w(dbl_scratch, flt_scratch);
+      return dbl_scratch;
+    } else if (r.IsDouble()) {
+      Abort("unsupported double immediate");
+    } else if (r.IsTagged()) {
+      Abort("unsupported tagged immediate");
+    }
+  } else if (op->IsStackSlot() || op->IsArgument()) {
+    MemOperand mem_op = ToMemOperand(op);
+    __ ldc1(dbl_scratch, mem_op);
+    return dbl_scratch;
+  }
+  UNREACHABLE();
   return dbl_scratch;
 }
 
@@ -611,21 +633,10 @@ void LCodeGen::DeoptimizeIf(Condition cc,
   if (cc == al) {
     __ Jump(entry, RelocInfo::RUNTIME_ENTRY);
   } else {
-    // We often have several deopts to the same entry, reuse the last
-    // jump entry if this is the case.
-    Comment(";;; Jump to deopt entry");
-    // TODO(kalmard): This was taken from ARM. Seems to create infinite
-    // loops like this:
-    // beq s3, at, -1
-#if 0
-    if (deopt_jump_table_.is_empty() ||
-        (deopt_jump_table_.last().address != entry)) {
-      deopt_jump_table_.Add(JumpTableEntry(entry));
-    }
-    __ Branch(&deopt_jump_table_.last().label, cc, src1, src2);
-#else
+    // NOTE: ARM has a little different code here. It is part of ab8e3bd92
+    // which hasn't been ported yet. Be careful - the ARM code would compile
+    // but cause silent errors later.
     __ Jump(entry, RelocInfo::RUNTIME_ENTRY, cc, src1, src2);
-#endif
   }
 }
 
@@ -995,8 +1006,6 @@ void LCodeGen::DoMulI(LMulI* instr) {
       __ mfhi(scratch);
       __ mflo(result);
       __ sra(at, result, 31);
-      // TODO(kalmard): is this correct? Shouldn't we specifically compare both
-      // sides with zero?
       DeoptimizeIf(ne, instr->environment(), scratch, Operand(at));
     } else {
       __ mul(result, left, right);
@@ -1054,25 +1063,22 @@ void LCodeGen::DoShiftI(LShiftI* instr) {
   LOperand* right_op = instr->InputAt(1);
   Register left = ToRegister(instr->InputAt(0));
   Register result = ToRegister(instr->result());
-  Register scratch = scratch0();
 
   if (right_op->IsRegister()) {
-    // Mask the right_op operand.
-    // TODO(kalmard): This is probably not needed on MIPS, at least not in all
-    // cases.
-    __ And(scratch, ToRegister(right_op), Operand(0x1F));
+    // No need to mask the right operand on MIPS, it is built into the variable
+    // shift instructions.
     switch (instr->op()) {
       case Token::SAR:
-        __ srav(result, left, scratch);
+        __ srav(result, left, ToRegister(right_op));
         break;
       case Token::SHR:
-        __ srlv(result, left, scratch);
+        __ srlv(result, left, ToRegister(right_op));
         if (instr->can_deopt()) {
           DeoptimizeIf(lt, instr->environment(), result, Operand(zero_reg));
         }
         break;
       case Token::SHL:
-        __ sllv(result, left, scratch);
+        __ sllv(result, left, ToRegister(right_op));
         break;
       default:
         UNREACHABLE();
@@ -1423,26 +1429,15 @@ void LCodeGen::DoBranch(LBranch* instr) {
       __ JumpIfSmi(reg, true_label);
 
       // Test double values. Zero and NaN are false.
-
-      // TODO(plind): I think this is optimization, and stub below
-      // can handle everything.
-      // TODO(kalmard): This could be ported to MIPS using BranchF but would
-      // require two double scratches and lithium only has one. Can we get
-      // another one without too much hassle?
-
       Label call_stub;
-      // DoubleRegister dbl_scratch = d0;
-      // Register scratch = scratch0();
-      // __ ldr(scratch, FieldMemOperand(reg, HeapObject::kMapOffset));
-      // __ LoadRoot(ip, Heap::kHeapNumberMapRootIndex);
-      // __ cmp(scratch, Operand(ip));
-      // __ b(ne, &call_stub);
-      // __ sub(ip, reg, Operand(kHeapObjectTag));
-      // __ vldr(dbl_scratch, ip, HeapNumber::kValueOffset);
-      // __ VFPCompareAndLoadFlags(dbl_scratch, 0.0, scratch);
-      // __ tst(scratch, Operand(kVFPZConditionFlagBit | kVFPVConditionFlagBit));
-      // __ b(ne, false_label);
-      // __ Branch(true_label);
+      DoubleRegister dbl_scratch = double_scratch0();
+      Register scratch = scratch0();
+      __ lw(scratch, FieldMemOperand(reg, HeapObject::kMapOffset));
+      __ LoadRoot(at, Heap::kHeapNumberMapRootIndex);
+      __ Branch(&call_stub, ne, scratch, Operand(at));
+      __ ldc1(dbl_scratch, FieldMemOperand(reg, HeapNumber::kValueOffset));
+      __ BranchF(false_label, false_label, eq, dbl_scratch, kDoubleRegZero);
+      __ Branch(true_label);
 
       // The conversion stub doesn't cause garbage collections so it's
       // safe to not record a safepoint after the call.
@@ -1900,13 +1895,8 @@ void LCodeGen::DoInstanceOfKnownGlobal(LInstanceOfKnownGlobal* instr) {
   __ Branch(&false_result, eq, object, Operand(temp));
 
   // String values is not instance of anything.
-  // TODO(kalmard) ARM uses the IsObjectStringType masm method here.
-  // Should we create something similar?
-  __ lw(temp, FieldMemOperand(object, HeapObject::kMapOffset));
-  __ lbu(temp, FieldMemOperand(temp, Map::kInstanceTypeOffset));
-  __ And(temp, temp, Operand(kIsNotStringMask));
-  ASSERT_EQ(0, kStringTag);
-  __ Branch(&false_result, eq, temp, Operand(zero_reg));
+  Condition cc = __ IsObjectStringType(object, temp, temp);
+  __ Branch(&false_result, cc, temp, Operand(zero_reg));
 
   // Go to the deferred code.
   __ Branch(deferred->entry());
@@ -3990,7 +3980,7 @@ void LCodeGen::DoClampTToUint8(LClampTToUint8* instr) {
   // conversions.
   DeoptimizeIf(ne, instr->environment(), input_reg,
                Operand(factory()->undefined_value()));
-  __ Ext(input_reg, input_reg, 0, 16);
+  __ mov(result_reg, zero_reg);
   __ jmp(&done);
 
   // Heap number
@@ -4224,9 +4214,9 @@ Condition LCodeGen::EmitTypeofIs(Label* true_label,
                                  Handle<String> type_name,
                                  Register& cmp1,
                                  Operand& cmp2) {
-  // TODO(kalmard): This function utilizes the delay slot heavily. Verify that
-  // it doesn't cause problems and add some comments/explanation. Try to find a
-  // simple "name" that describes this behavior and use it in comments.
+  // This function utilizes the delay slot heavily. This is used to load
+  // values that are always usable without depending on the type of the input
+  // register.
   Condition final_branch_condition = kNoCondition;
   Register scratch = scratch0();
   if (type_name->Equals(heap()->number_symbol())) {
@@ -4242,6 +4232,8 @@ Condition LCodeGen::EmitTypeofIs(Label* true_label,
     __ GetObjectType(input, input, scratch);
     __ Branch(USE_DELAY_SLOT, false_label,
               ge, scratch, Operand(FIRST_NONSTRING_TYPE));
+    // input is an object so we can load the BitFieldOffset even if we take the
+    // other branch.
     __ lbu(at, FieldMemOperand(input, Map::kBitFieldOffset));
     __ And(at, at, 1 << Map::kIsUndetectable);
     cmp1 = at;
@@ -4259,6 +4251,8 @@ Condition LCodeGen::EmitTypeofIs(Label* true_label,
   } else if (type_name->Equals(heap()->undefined_symbol())) {
     __ LoadRoot(at, Heap::kUndefinedValueRootIndex);
     __ Branch(USE_DELAY_SLOT, true_label, eq, at, Operand(input));
+    // The first instruction of JumpIfSmi is an And - it is safe in the delay
+    // slot.
     __ JumpIfSmi(input, false_label);
     // Check for undetectable objects => true.
     __ lw(input, FieldMemOperand(input, HeapObject::kMapOffset));
@@ -4279,12 +4273,15 @@ Condition LCodeGen::EmitTypeofIs(Label* true_label,
     __ JumpIfSmi(input, false_label);
     __ LoadRoot(at, Heap::kNullValueRootIndex);
     __ Branch(USE_DELAY_SLOT, true_label, eq, at, Operand(input));
+    // input is an object, it is safe to use GetObjectType in the delay slot.
     __ GetObjectType(input, input, scratch);
     __ Branch(USE_DELAY_SLOT, false_label,
               lt, scratch, Operand(FIRST_NONCALLABLE_SPEC_OBJECT_TYPE));
+    // Still an object, so the InstanceType can be loaded.
     __ lbu(scratch, FieldMemOperand(input, Map::kInstanceTypeOffset));
     __ Branch(USE_DELAY_SLOT, false_label,
               gt, scratch, Operand(LAST_NONCALLABLE_SPEC_OBJECT_TYPE));
+    // Still an object, so the BitField can be loaded.
     // Check for undetectable objects => false.
     __ lbu(at, FieldMemOperand(input, Map::kBitFieldOffset));
     __ And(at, at, 1 << Map::kIsUndetectable);

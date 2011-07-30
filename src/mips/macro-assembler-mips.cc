@@ -763,6 +763,64 @@ void MacroAssembler::MultiPopReversed(RegList regs) {
 }
 
 
+void MacroAssembler::MultiPushFPU(RegList regs) {
+  CpuFeatures::Scope scope(FPU);
+  int16_t NumSaved = 0;
+  int16_t NumToPush = NumberOfBitsSet(regs);
+
+  addiu(sp, sp, -8 * NumToPush);
+  for (int16_t i = kNumRegisters; i > 0; i--) {
+    if ((regs & (1 << i)) != 0) {
+      sdc1(FPURegister::from_code(i),
+           MemOperand(sp, 8 * (NumToPush - ++NumSaved)));
+    }
+  }
+}
+
+
+void MacroAssembler::MultiPushReversedFPU(RegList regs) {
+  CpuFeatures::Scope scope(FPU);
+  int16_t NumSaved = 0;
+  int16_t NumToPush = NumberOfBitsSet(regs);
+
+  addiu(sp, sp, -8 * NumToPush);
+  for (int16_t i = 0; i < kNumRegisters; i++) {
+    if ((regs & (1 << i)) != 0) {
+      sdc1(FPURegister::from_code(i),
+           MemOperand(sp, 8 * (NumToPush - ++NumSaved)));
+    }
+  }
+}
+
+
+void MacroAssembler::MultiPopFPU(RegList regs) {
+  CpuFeatures::Scope scope(FPU);
+  int16_t NumSaved = 0;
+
+  for (int16_t i = 0; i < kNumRegisters; i++) {
+    if ((regs & (1 << i)) != 0) {
+      ldc1(FPURegister::from_code(i),
+           MemOperand(sp, 8 * (NumSaved++)));
+    }
+  }
+  addiu(sp, sp, 8 * NumSaved);
+}
+
+
+void MacroAssembler::MultiPopReversedFPU(RegList regs) {
+  CpuFeatures::Scope scope(FPU);
+  int16_t NumSaved = 0;
+
+  for (int16_t i = kNumRegisters; i > 0; i--) {
+    if ((regs & (1 << i)) != 0) {
+      ldc1(FPURegister::from_code(i),
+           MemOperand(sp, 8 * (NumSaved++)));
+    }
+  }
+  addiu(sp, sp, 8 * NumSaved);
+}
+
+
 void MacroAssembler::Ext(Register rt,
                          Register rs,
                          uint16_t pos,
@@ -907,9 +965,6 @@ void MacroAssembler::Trunc_uw_d(FPURegister fd,
   // Test if scratch > fd.
   // If fd < 2^31 we can convert it normally.
   Label simple_convert;
-  // TODO(kalmard): the fd == NaN case is not covered in this function.
-  // We could toggle the appropriate FSCR bit but this function is rarely used
-  // (if at all) and never in such an environment.
   BranchF(&simple_convert, NULL, lt, fd, scratch);
 
   // First we subtract 2^31 from fd, then trunc it to rs
@@ -949,11 +1004,9 @@ void MacroAssembler::BranchF(Label* target,
   }
 
   if (target) {
-    // Now we can check for 'unordered or ...' cases, as !unordered is
-    // guaranteed here (or if nan is not set, we assume the caller handled
-    // it somewhere else).
-    // TODO(kalmard): Can unsigned conditions be treated as signed? Seems
-    // to be working...
+    // Here NaN cases were either handled by this function or are assumed to
+    // have been handled by the caller.
+    // Unsigned conditions are treated as their signed counterpart.
     switch (cc) {
       case Uless:
       case less:
@@ -999,9 +1052,6 @@ void MacroAssembler::Move(FPURegister dst, double imm) {
   static const DoubleRepresentation zero(0.0);
   DoubleRepresentation value(imm);
   // Handle special values first.
-  // TODO(kalmard): kDoubleRegZero is only used for crankshaft. Although it
-  // (f28) is not used anywhere at the moment, what guarantees that doesn't
-  // change?
   bool force_load = dst.is(kDoubleRegZero);
   if (value.bits == zero.bits && !force_load) {
     mov_d(dst, kDoubleRegZero);
@@ -1012,12 +1062,20 @@ void MacroAssembler::Move(FPURegister dst, double imm) {
     DoubleAsTwoUInt32(imm, &lo, &hi);
     // Move the low part of the double into the lower of the corresponding FPU
     // register of FPU register pair.
-    li(at, Operand(lo));
-    mtc1(at, dst);
+    if (lo != 0) {
+      li(at, Operand(lo));
+      mtc1(at, dst);
+    } else {
+      mtc1(zero_reg, dst);
+    }
     // Move the high part of the double into the higher of the corresponding FPU
     // register of FPU register pair.
-    li(at, Operand(hi));
-    mtc1(at, FPURegister::from_code(dst.code() + 1));
+    if (hi != 0) {
+      li(at, Operand(hi));
+      mtc1(at, dst.high());
+    } else {
+      mtc1(zero_reg, dst.high());
+    }
   }
 }
 
@@ -1382,9 +1440,8 @@ void MacroAssembler::BranchShort(int16_t offset, Condition cond, Register rs,
   Register scratch = at;
 
   if (rt.is_reg()) {
-    // We don't want any other register but scratch clobbered.
-    // TODO(kalmard): temporarily removed, check if this is needed:
-    // ASSERT(!scratch.is(rs) && !scratch.is(rt.rm_));
+    // NOTE: 'at' can be clobbered by Branch but it is legal to use it as rs or
+    // rt.
     r2 = rt.rm_;
     switch (cond) {
       case cc_always:
@@ -4534,8 +4591,6 @@ void MacroAssembler::ClampDoubleToUint8(Register result_reg,
 
   // In 0-255 range, round and truncate.
   bind(&in_bounds);
-  // TODO(kalmard): the ARM version adds 0.5 and then truncates.
-  // Isn't this the same as rounding?
   round_w_d(temp_double_reg, input_reg);
   mfc1(result_reg, temp_double_reg);
   bind(&done);

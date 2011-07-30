@@ -30,7 +30,6 @@
 #ifndef V8_MIPS_FRAMES_MIPS_H_
 #define V8_MIPS_FRAMES_MIPS_H_
 
-
 namespace v8 {
 namespace internal {
 
@@ -46,9 +45,16 @@ static const RegList kJSCallerSaved =
   1 << 5 |  // a1
   1 << 6 |  // a2
   1 << 7 |  // a3
-  1 << 8;   // t0
+  1 << 8  |  // t0
+  1 << 9  |  // t1
+  1 << 10 |  // t2
+  1 << 11 |  // t3
+  1 << 12 |  // t4
+  1 << 13 |  // t5
+  1 << 14 |  // t6
+  1 << 15;   // t7
 
-static const int kNumJSCallerSaved = 7;
+static const int kNumJSCallerSaved = 14;
 
 
 // Return the code of the n-th caller-saved register available to JavaScript
@@ -69,6 +75,11 @@ static const RegList kCalleeSaved =
   1 << 30;   // fp/s8
 
 static const int kNumCalleeSaved = 9;
+
+static const RegList kCalleeSavedFPU =
+    1 << 20 | 1 << 22 | 1 << 24 | 1 << 26 | 1 << 28 | 1 << 30;
+
+static const int kNumCalleeSavedFPU = 6;
 
 // Highest register +1 for which space is reserved in safepoints.
 // Currently must be a multiple of kBitsPerByte, due to missing roundups

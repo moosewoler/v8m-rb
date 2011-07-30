@@ -553,9 +553,6 @@ void Deoptimizer::FillInputFrame(Address tos, JavaScriptFrame* frame) {
 
 // This code tries to be close to ia32 code so that any changes can be
 // easily ported.
-// TODO(kalmard): This function emits reloc info and causes an assertion error
-// in deoptimizer.cc. The deopt system seems to be working with the assertion
-// disabled but this needs to be fixed.
 void Deoptimizer::EntryGenerator::Generate() {
   GeneratePrologue();
 
@@ -748,8 +745,6 @@ void Deoptimizer::EntryGenerator::Generate() {
   ExternalReference roots_address = ExternalReference::roots_address(isolate);
   __ li(roots, Operand(roots_address));
 
-  // TODO(kalmard): can we use 'at' here? It seems like a bad idea to use
-  // anything else, we just restored the registers.
   __ pop(at);  // Get continuation, leave pc on stack.
   __ pop(ra);
   __ Jump(at);
