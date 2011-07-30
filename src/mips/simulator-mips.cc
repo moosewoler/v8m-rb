@@ -870,12 +870,10 @@ void Simulator::Initialize(Isolate* isolate) {
   isolate->set_simulator_initialized(true);
   ::v8::internal::ExternalReference::set_redirector(isolate,
                                                     &RedirectExternalReference);
-  printf("Simulator::Initialize for another thread\n");
 }
 
 
 Simulator::Simulator(Isolate* isolate) : isolate_(isolate) {
-  printf("Simulator class created\n");
   i_cache_ = isolate_->simulator_i_cache();
   if (i_cache_ == NULL) {
     i_cache_ = new v8::internal::HashMap(&ICacheMatch);
