@@ -137,8 +137,7 @@ static bool AlwaysFullCompiler() {
 }
 
 
-static void FinishOptimization(Handle<JSFunction> function, int64_t start,
-                               int64_t instr_size) {
+static void FinishOptimization(Handle<JSFunction> function, int64_t start) {
   int opt_count = function->shared()->opt_count();
   function->shared()->set_opt_count(opt_count + 1);
   double ms = static_cast<double>(OS::Ticks() - start) / 1000;
@@ -151,18 +150,14 @@ static void FinishOptimization(Handle<JSFunction> function, int64_t start,
   if (FLAG_trace_opt_stats) {
     static double compilation_time = 0.0;
     static int compiled_functions = 0;
-    static int src_code_size = 0;
-    static int total_instr_size = 0;
+    static int code_size = 0;
 
     compilation_time += ms;
     compiled_functions++;
-    src_code_size += function->shared()->SourceSize();
-    total_instr_size += instr_size;
-    PrintF("Compiled: %d functions totalling %d source bytes, "
-           "%d instr bytes in %.2fms.\n",
+    code_size += function->shared()->SourceSize();
+    PrintF("Compiled: %d functions with %d byte source size in %fms.\n",
            compiled_functions,
-           src_code_size,
-           total_instr_size,
+           code_size,
            compilation_time);
   }
 }
@@ -292,8 +287,7 @@ static bool MakeCrankshaftCode(CompilationInfo* info) {
     Handle<Code> optimized_code = graph->Compile(info);
     if (!optimized_code.is_null()) {
       info->SetCode(optimized_code);
-      FinishOptimization(info->closure(), start,
-                         optimized_code->instruction_size());
+      FinishOptimization(info->closure(), start);
       return true;
     }
   }

@@ -229,11 +229,6 @@ class Simulator {
   // below (bad_ra, end_sim_pc).
   bool has_bad_pc() const;
 
-  long icount_;
-  long prev_icount;
-  int eoe_count;
-  void end_of_Execute();
-
  private:
   enum special_values {
     // Known bad pc value to ensure that the simulator does not execute
@@ -360,6 +355,7 @@ class Simulator {
   static const size_t stack_size_ = 1 * 1024*1024;
   char* stack_;
   bool pc_modified_;
+  int icount_;
   int break_count_;
 
   // Icache simulation.

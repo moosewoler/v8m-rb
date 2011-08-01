@@ -885,8 +885,6 @@ Simulator::Simulator(Isolate* isolate) : isolate_(isolate) {
   stack_ = reinterpret_cast<char*>(malloc(stack_size_));
   pc_modified_ = false;
   icount_ = 0;
-  prev_icount = 0;
-  eoe_count = 0;
   break_count_ = 0;
   break_pc_ = NULL;
   break_instr_ = 0;
@@ -1574,7 +1572,7 @@ bool Simulator::IsWatchpoint(uint32_t code) {
 void Simulator::PrintWatchpoint(uint32_t code) {
   MipsDebugger dbg(this);
   ++break_count_;
-  PrintF("\n---- break %d marker: %3d  (instr count: %8lu) ----------"
+  PrintF("\n---- break %d marker: %3d  (instr count: %8d) ----------"
          "----------------------------------",
          code, break_count_, icount_);
   dbg.PrintAllRegs();  // Print registers and continue running.
@@ -2668,15 +2666,6 @@ void Simulator::InstructionDecode(Instruction* instr) {
 }
 
 
-void Simulator::end_of_Execute() {
-  eoe_count++;
-  //printf("    end of %2d'th Simulator::Execute: %9d instrs, %9d cumulative\n",
-  //       eoe_count, icount_ - prev_icount, icount_);
-  //if (eoe_count >= 38)
-  //  V8_Fatal(__FILE__, __LINE__, "get gdb stack trace");
-  prev_icount = icount_;
-}
-
 
 void Simulator::Execute() {
   // Get the PC to simulate. Cannot use the accessor here as we need the
@@ -2706,7 +2695,6 @@ void Simulator::Execute() {
       program_counter = get_pc();
     }
   }
-  end_of_Execute();
 }
 
 
