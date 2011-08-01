@@ -5,8 +5,10 @@
 
 import os, sys, subprocess, tempfile
 
-BENCH_RUNNER = 'run1'
-REPEATS = 2
+V8_SHELL = 'shell14_7'
+BENCH_RUNNER = 'run'
+REPEATS = 20
+RUN_OPTIONS = []
 
 """
 The input file contains a sequence of benchmark suite scorings.
@@ -29,8 +31,6 @@ def collect_scores(result_text, test_scores):
   for result_line in result_text.splitlines():
     if not result_line.startswith('----'):
       testname, score = result_line.split(': ', 1)
-      if testname.startswith('Score (version'):
-        testname = 'Full Suite'
       test_scores.setdefault(testname, []).append(float(score))
 
 
@@ -38,7 +38,9 @@ def run_benchmarks():
   toolsdir = os.path.dirname(__file__)
   v8dir = os.path.dirname(toolsdir)
   cwd = os.path.join(v8dir, 'benchmarks')
-  args = ['../shell', BENCH_RUNNER+'.js']
+  args = ['../'+V8_SHELL]
+  args.extend(RUN_OPTIONS)
+  args.append(BENCH_RUNNER+'.js')
   print '#' + ' '.join(args)
   result_file = tempfile.TemporaryFile()
   p = subprocess.Popen(args, cwd=cwd, stdout=result_file)
@@ -68,25 +70,28 @@ def show_stats(name, samples):
     dev_pct = ''
   else:
     dev_pct = '%6.1f%%' % (100*stdev/mean)
-  print ('%12s %7.1f %7.1f %7.1f %7s %4d'
+  print ('%12s %5.0f %7.1f %5.0f %7s %4d'
          % (name, max_, mean, min_, dev_pct, n))
 
 
 test_order = [
   'Richards', 'DeltaBlue', 'Crypto', 'RayTrace',
-  'EarleyBoyer', 'RegExp', 'Splay', 'Full Suite',
+  'EarleyBoyer', 'RegExp', 'Splay',
   ]
 
 
 def main():
   test_scores = {}
   for i in xrange(REPEATS):
+    print 'Run %d:' % (i+1)
     collect_scores(run_benchmarks(), test_scores)
   print
-  print '        Test    Max     Avg     Min     Dev   Runs'
+  print '        Test   Max    Avg    Min    Dev   Runs'
   for testname in test_order:
     if testname in test_scores:
       show_stats(testname, test_scores[testname])
+  print
+  show_stats('Full Suite', test_scores['Score (version 6)'])
 
 
 main()
