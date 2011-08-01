@@ -72,7 +72,7 @@ namespace internal {
 // Core register.
 struct Register {
   static const int kNumRegisters = v8::internal::kNumRegisters;
-  static const int kNumAllocatableRegisters = 7; /// 14;  // v0 through t7.
+  static const int kNumAllocatableRegisters = 7;  // v0 through t0.
   // kNumAllocatableRegisters=7 is the practical minimum on Mips.
   static const int kSizeInBytes = 4;
 
@@ -179,7 +179,7 @@ struct FPURegister {
   //  f28: 0.0
   //  f30: scratch register.
   static const int kNumReservedRegisters = 2;
-  static const int kNumAllocatableRegisters = 4; /// kNumRegisters / 2 - kNumReservedRegisters;
+  static const int kNumAllocatableRegisters = 4; /// was kNumRegisters / 2 - kNumReservedRegisters;
   // kNumAllocatableRegisters=4 is the practical minimum on Mips,
   //  due to hard-coded refs to f2/f4/f6 in lithium-mips.cc
 
