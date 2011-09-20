@@ -432,11 +432,13 @@ MemoryChunk* MemoryChunk::Initialize(Heap* heap,
   chunk->InitializeReservedMemory();
   chunk->slots_buffer_ = NULL;
   chunk->skip_list_ = NULL;
+  chunk->ResetLiveBytes();
   Bitmap::Clear(chunk);
   chunk->initialize_scan_on_scavenge(false);
   chunk->SetFlag(WAS_SWEPT_PRECISELY);
 
   ASSERT(OFFSET_OF(MemoryChunk, flags_) == kFlagsOffset);
+  ASSERT(OFFSET_OF(MemoryChunk, live_byte_count_) == kLiveBytesOffset);
 
   if (executable == EXECUTABLE) chunk->SetFlag(IS_EXECUTABLE);
 
@@ -784,7 +786,7 @@ void PagedSpace::Verify(ObjectVisitor* visitor) {
   if (was_swept_conservatively_) return;
 
   bool allocation_pointer_found_in_space =
-      (allocation_info_.top != allocation_info_.limit);
+      (allocation_info_.top == allocation_info_.limit);
   PageIterator page_iterator(this);
   while (page_iterator.has_next()) {
     Page* page = page_iterator.next();
@@ -822,9 +824,9 @@ void PagedSpace::Verify(ObjectVisitor* visitor) {
       ASSERT(object->address() + size <= top);
       end_of_previous_object = object->address() + size;
     }
-    // TODO(1672): Page live bytes are off for some tests.
-    // CHECK_LE(black_size, page->LiveBytes());
+    CHECK_LE(black_size, page->LiveBytes());
   }
+  ASSERT(allocation_pointer_found_in_space);
 }
 #endif
 
@@ -923,12 +925,14 @@ void NewSpace::Flip() {
 
 
 void NewSpace::Grow() {
+  // Double the semispace size but only up to maximum capacity.
   ASSERT(Capacity() < MaximumCapacity());
-  if (to_space_.Grow()) {
-    // Only grow from space if we managed to grow to space.
-    if (!from_space_.Grow()) {
-      // If we managed to grow to space but couldn't grow from space,
-      // attempt to shrink to space.
+  int new_capacity = Min(MaximumCapacity(), 2 * static_cast<int>(Capacity()));
+  if (to_space_.GrowTo(new_capacity)) {
+    // Only grow from space if we managed to grow to-space.
+    if (!from_space_.GrowTo(new_capacity)) {
+      // If we managed to grow to-space but couldn't grow from-space,
+      // attempt to shrink to-space.
       if (!to_space_.ShrinkTo(from_space_.Capacity())) {
         // We are in an inconsistent state because we could not
         // commit/uncommit memory from new space.
@@ -942,14 +946,14 @@ void NewSpace::Grow() {
 
 void NewSpace::Shrink() {
   int new_capacity = Max(InitialCapacity(), 2 * SizeAsInt());
-  int rounded_new_capacity =
-      RoundUp(new_capacity, static_cast<int>(OS::AllocateAlignment()));
+  int rounded_new_capacity = RoundUp(new_capacity, Page::kPageSize);
   if (rounded_new_capacity < Capacity() &&
       to_space_.ShrinkTo(rounded_new_capacity))  {
-    // Only shrink from space if we managed to shrink to space.
+    // Only shrink from-space if we managed to shrink to-space.
+    from_space_.Reset();
     if (!from_space_.ShrinkTo(rounded_new_capacity)) {
-      // If we managed to shrink to space but couldn't shrink from
-      // space, attempt to grow to space again.
+      // If we managed to shrink to-space but couldn't shrink from
+      // space, attempt to grow to-space again.
       if (!to_space_.GrowTo(from_space_.Capacity())) {
         // We are in an inconsistent state because we could not
         // commit/uncommit memory from new space.
@@ -1142,15 +1146,6 @@ bool SemiSpace::Uncommit() {
 }
 
 
-bool SemiSpace::Grow() {
-  // Double the semispace size but only up to maximum capacity.
-  ASSERT(static_cast<size_t>(Page::kPageSize) > OS::AllocateAlignment());
-  int new_capacity = Min(maximum_capacity_,
-      RoundUp(capacity_ * 2, static_cast<int>(Page::kPageSize)));
-  return GrowTo(new_capacity);
-}
-
-
 bool SemiSpace::GrowTo(int new_capacity) {
   ASSERT((new_capacity & Page::kPageAlignmentMask) == 0);
   ASSERT(new_capacity <= maximum_capacity_);
@@ -1207,7 +1202,7 @@ bool SemiSpace::ShrinkTo(int new_capacity) {
       NewSpacePage::FromAddress(space_end - pages_after * Page::kPageSize);
   new_last_page->set_next_page(anchor());
   anchor()->set_prev_page(new_last_page);
-  ASSERT(current_page_ == first_page());
+  ASSERT((current_page_ <= first_page()) && (current_page_ >= new_last_page));
 
   return true;
 }
@@ -2504,6 +2499,31 @@ void LargeObjectSpace::CollectCodeStatistics() {
     }
   }
 }
+
+
+void Page::Print() {
+  // Make a best-effort to print the objects in the page.
+  PrintF("Page@%p in %s\n",
+         this->address(),
+         AllocationSpaceName(this->owner()->identity()));
+  printf(" --------------------------------------\n");
+  HeapObjectIterator objects(this, heap()->GcSafeSizeOfOldObjectFunction());
+  unsigned mark_size = 0;
+  for (HeapObject* object = objects.Next();
+       object != NULL;
+       object = objects.Next()) {
+    bool is_marked = Marking::MarkBitFrom(object).Get();
+    PrintF(" %c ", (is_marked ? '!' : ' '));  // Indent a little.
+    if (is_marked) {
+      mark_size += heap()->GcSafeSizeOfOldObjectFunction()(object);
+    }
+    object->ShortPrint();
+    PrintF("\n");
+  }
+  printf(" --------------------------------------\n");
+  printf(" Marked: %x, LiveCount: %x\n", mark_size, LiveBytes());
+}
+
 #endif  // DEBUG
 
 } }  // namespace v8::internal

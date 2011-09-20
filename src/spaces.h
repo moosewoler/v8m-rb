@@ -452,12 +452,27 @@ class MemoryChunk {
   // Manage live byte count (count of bytes known to be live,
   // because they are marked black).
   void ResetLiveBytes() {
+    if (FLAG_trace_live_byte_count) {
+      PrintF("ResetLiveBytes:%p:%x->0\n",
+             static_cast<void*>(this), live_byte_count_);
+    }
     live_byte_count_ = 0;
   }
   void IncrementLiveBytes(int by) {
+    ASSERT_LE(static_cast<unsigned>(live_byte_count_), size_);
+    if (FLAG_trace_live_byte_count) {
+      printf("UpdateLiveBytes:%p:%x%c=%x->%x\n",
+             static_cast<void*>(this), live_byte_count_,
+             ((by < 0) ? '-' : '+'), ((by < 0) ? -by : by),
+             live_byte_count_ + by);
+    }
     live_byte_count_ += by;
+    ASSERT_LE(static_cast<unsigned>(live_byte_count_), size_);
   }
-  int LiveBytes() { return live_byte_count_; }
+  int LiveBytes() {
+    ASSERT(static_cast<unsigned>(live_byte_count_) <= size_);
+    return live_byte_count_;
+  }
   static void IncrementLiveBytes(Address address, int by) {
     MemoryChunk::FromAddress(address)->IncrementLiveBytes(by);
   }
@@ -467,10 +482,11 @@ class MemoryChunk {
 
   static const intptr_t kAlignmentMask = kAlignment - 1;
 
+  static const intptr_t kSizeOffset = kPointerSize + kPointerSize;
+
   static const intptr_t kLiveBytesOffset =
-      kPointerSize + kPointerSize + kPointerSize + kPointerSize +
-      kPointerSize + kPointerSize + kPointerSize + kPointerSize +
-      kIntSize;
+      kSizeOffset + kPointerSize + kPointerSize + kPointerSize +
+      kPointerSize + kPointerSize + kPointerSize + kIntSize;
 
   static const size_t kSlotsBufferOffset = kLiveBytesOffset + kIntSize;
 
@@ -699,6 +715,10 @@ class Page : public MemoryChunk {
 
   void ClearSweptPrecisely() { ClearFlag(WAS_SWEPT_PRECISELY); }
   void ClearSweptConservatively() { ClearFlag(WAS_SWEPT_CONSERVATIVELY); }
+
+#ifdef DEBUG
+  void Print();
+#endif  // DEBUG
 
   friend class MemoryAllocator;
 };
@@ -1773,14 +1793,9 @@ class SemiSpace : public Space {
   // True if the space has been set up but not torn down.
   bool HasBeenSetup() { return start_ != NULL; }
 
-  // Grow the size of the semispace by committing extra virtual memory.
-  // Assumes that the caller has checked that the semispace has not reached
-  // its maximum capacity (and thus there is space available in the reserved
-  // address range to grow).
-  bool Grow();
-
   // Grow the semispace to the new capacity.  The new capacity
-  // requested must be larger than the current capacity.
+  // requested must be larger than the current capacity and less than
+  // the maximum capacity.
   bool GrowTo(int new_capacity);
 
   // Shrinks the semispace to the new capacity.  The new capacity
