@@ -197,13 +197,14 @@ void MacroAssembler::CompareRoot(const Operand& with,
 }
 
 
-void MacroAssembler::RememberedSetHelper(Register addr,
+void MacroAssembler::RememberedSetHelper(Register object,  // For debug tests.
+                                         Register addr,
                                          Register scratch,
                                          SaveFPRegsMode save_fp,
                                          RememberedSetFinalAction and_then) {
   if (FLAG_debug_code) {
     Label ok;
-    JumpIfNotInNewSpace(addr, scratch, &ok, Label::kNear);
+    JumpIfNotInNewSpace(object, scratch, &ok, Label::kNear);
     int3();
     bind(&ok);
   }
@@ -4184,7 +4185,7 @@ void MacroAssembler::EnsureNotWhite(
   addq(length, Immediate(0x04));
   // Value now either 4 (if ASCII) or 8 (if UC16), i.e. char-size shifted by 2.
   imul(length, FieldOperand(value, String::kLengthOffset));
-  shr(length, Immediate(2 + kSmiTagSize));
+  shr(length, Immediate(2 + kSmiTagSize + kSmiShiftSize));
   addq(length, Immediate(SeqString::kHeaderSize + kObjectAlignmentMask));
   and_(length, Immediate(~kObjectAlignmentMask));
 
