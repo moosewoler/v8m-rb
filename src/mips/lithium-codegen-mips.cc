@@ -212,14 +212,11 @@ bool LCodeGen::GeneratePrologue() {
         // Load parameter from stack.
         __ lw(a0, MemOperand(fp, parameter_offset));
         // Store it in the context.
-        __ li(a1, Operand(Context::SlotOffset(var->index())));
-        __ addu(at, cp, a1);
-        __ sw(a0, MemOperand(at));
-        // Update the write barrier. This clobbers all involved
-        // registers, so we have to use two more registers to avoid
-        // clobbering cp.
-        __ mov(a2, cp);
-        __ RecordWrite(a2, Operand(a1), a3, a0);
+        MemOperand target = ContextOperand(cp, var->index());
+        __ sw(a0, target);
+        // Update the write barrier. This clobbers a3 and a0.
+        __ RecordWriteContextSlot(
+            cp, target.offset(), a0, a3, kRAHasBeenSaved, kSaveFPRegs);
       }
     }
     Comment(";;; End allocate local context");
@@ -715,7 +712,7 @@ void LCodeGen::RecordSafepoint(
     int deoptimization_index) {
   ASSERT(expected_safepoint_kind_ == kind);
 
-  const ZoneList<LOperand*>* operands = pointers->operands();
+  const ZoneList<LOperand*>* operands = pointers->GetNormalizedOperands();
   Safepoint safepoint = safepoints_.DefineSafepoint(masm(),
       kind, arguments, deoptimization_index);
   for (int i = 0; i < operands->length(); i++) {
@@ -2112,6 +2109,7 @@ void LCodeGen::DoLoadGlobalGeneric(LLoadGlobalGeneric* instr) {
 void LCodeGen::DoStoreGlobalCell(LStoreGlobalCell* instr) {
   Register value = ToRegister(instr->InputAt(0));
   Register scratch = scratch0();
+  Register scratch2 = ToRegister(instr->TempAt(0));
 
   // Load the cell.
   __ li(scratch, Operand(Handle<Object>(instr->hydrogen()->cell())));
@@ -2121,7 +2119,6 @@ void LCodeGen::DoStoreGlobalCell(LStoreGlobalCell* instr) {
   // to update the property details in the property dictionary to mark
   // it as no longer deleted.
   if (instr->hydrogen()->check_hole_value()) {
-    Register scratch2 = ToRegister(instr->TempAt(0));
     __ lw(scratch2,
           FieldMemOperand(scratch, JSGlobalPropertyCell::kValueOffset));
     __ LoadRoot(at, Heap::kTheHoleValueRootIndex);
@@ -2130,6 +2127,15 @@ void LCodeGen::DoStoreGlobalCell(LStoreGlobalCell* instr) {
 
   // Store the value.
   __ sw(value, FieldMemOperand(scratch, JSGlobalPropertyCell::kValueOffset));
+
+  // Cells are always in the remembered set.
+  __ RecordWriteField(scratch,
+                      JSGlobalPropertyCell::kValueOffset,
+                      value,
+                      scratch2,
+                      kRAHasBeenSaved,
+                      kSaveFPRegs,
+                      OMIT_REMEMBERED_SET);
 }
 
 
@@ -2155,10 +2161,15 @@ void LCodeGen::DoLoadContextSlot(LLoadContextSlot* instr) {
 void LCodeGen::DoStoreContextSlot(LStoreContextSlot* instr) {
   Register context = ToRegister(instr->context());
   Register value = ToRegister(instr->value());
-  __ sw(value, ContextOperand(context, instr->slot_index()));
+  MemOperand target = ContextOperand(context, instr->slot_index());
+  __ sw(value, target);
   if (instr->needs_write_barrier()) {
-    int offset = Context::SlotOffset(instr->slot_index());
-    __ RecordWrite(context, Operand(offset), value, scratch0());
+    __ RecordWriteContextSlot(context,
+                              target.offset(),
+                              value,
+                              scratch0(),
+                              kRAHasBeenSaved,
+                              kSaveFPRegs);
   }
 }
 
@@ -3192,7 +3203,8 @@ void LCodeGen::DoStoreNamedField(LStoreNamedField* instr) {
     __ sw(value, FieldMemOperand(object, offset));
     if (instr->needs_write_barrier()) {
       // Update the write barrier for the object for in-object properties.
-      __ RecordWrite(object, Operand(offset), value, scratch);
+      __ RecordWriteField(
+          object, offset, value, scratch, kRAHasBeenSaved, kSaveFPRegs);
     }
   } else {
     __ lw(scratch, FieldMemOperand(object, JSObject::kPropertiesOffset));
@@ -3200,7 +3212,8 @@ void LCodeGen::DoStoreNamedField(LStoreNamedField* instr) {
     if (instr->needs_write_barrier()) {
       // Update the write barrier for the properties array.
       // object is used as a scratch register.
-      __ RecordWrite(scratch, Operand(offset), value, object);
+      __ RecordWriteField(
+          scratch, offset, value, object, kRAHasBeenSaved, kSaveFPRegs);
     }
   }
 }
@@ -3249,7 +3262,7 @@ void LCodeGen::DoStoreKeyedFastElement(LStoreKeyedFastElement* instr) {
   if (instr->hydrogen()->NeedsWriteBarrier()) {
     // Compute address of modified element and store it into key register.
     __ Addu(key, scratch, Operand(FixedArray::kHeaderSize));
-    __ RecordWrite(elements, key, value);
+    __ RecordWrite(elements, key, value, kRAHasBeenSaved, kSaveFPRegs);
   }
 }
 
