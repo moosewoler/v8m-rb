@@ -805,10 +805,10 @@ static void Generate_JSConstructStubHelper(MacroAssembler* masm,
       __ lw(a0, FieldMemOperand(a2, Map::kInstanceSizesOffset));
       __ Ext(t6, a0, Map::kPreAllocatedPropertyFieldsByte * kBitsPerByte,
              kBitsPerByte);
-      __ Addu(a3, a3, Operand(t0));
+      __ Addu(a3, a3, Operand(t6));
       __ Ext(t6, a0, Map::kInObjectPropertiesByte * kBitsPerByte,
               kBitsPerByte);
-      __ subu(a3, a3, t0);
+      __ subu(a3, a3, t6);
 
       // Done if no extra properties are to be allocated.
       __ Branch(&allocated, eq, a3, Operand(zero_reg));
