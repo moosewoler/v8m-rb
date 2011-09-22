@@ -545,7 +545,7 @@ class Assembler : public AssemblerBase {
 
   // Read/Modify the code target address in the branch/call instruction at pc.
   static Address target_address_at(Address pc);
-  static void set_target_address_at(Address pc, Address target);
+  static bool set_target_address_at(Address pc, Address target);
 
   static void JumpLabelToJumpRegister(Address pc);
 

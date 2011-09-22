@@ -44,6 +44,43 @@ namespace v8 {
 namespace internal {
 
 
+#ifdef V8_TARGET_ARCH_MIPS
+void mipssetaddr(Object** addr, Object* target, const char* file, unsigned line) {
+  if (FLAG_trace_gc)
+    fprintf(stderr, "%u ", line);
+  bool mips_target = Assembler::set_target_address_at(reinterpret_cast<byte*>(addr), reinterpret_cast<byte*>(target));
+  if (!mips_target){
+    *addr = target;
+    if (FLAG_trace_gc)
+      fprintf(stderr, "miss ");
+  } else {
+    if (FLAG_trace_gc)
+      fprintf(stderr, "hit  ");
+  }
+
+  if (FLAG_trace_gc)
+    fprintf(stderr, "in file %s\n", file);
+}
+
+Object* mipsgetaddr(Object** addr, const char* file, unsigned line) {
+  if (FLAG_trace_gc)
+    fprintf(stderr, "%u ", line);
+  Object* ooo = reinterpret_cast<Object*>(Assembler::target_address_at(reinterpret_cast<byte*>(addr)));
+  if (ooo == NULL){
+    ooo = *addr;
+    if (FLAG_trace_gc)
+      fprintf(stderr, "miss ");
+  } else {
+    if (FLAG_trace_gc)
+      fprintf(stderr, "hit  ");
+  }
+
+  if (FLAG_trace_gc)
+    fprintf(stderr, "in file %s\n", file);
+  return ooo;
+}
+#endif
+
 const char* Marking::kWhiteBitPattern = "00";
 const char* Marking::kBlackBitPattern = "10";
 const char* Marking::kGreyBitPattern = "11";
@@ -2669,16 +2706,16 @@ class EvacuationWeakObjectRetainer : public WeakObjectRetainer {
 
 
 static inline void UpdateSlot(Object** slot) {
-  Object* obj = *slot;
+  Object* obj = GETOBJPTR(slot);
   if (!obj->IsHeapObject()) return;
 
   HeapObject* heap_obj = HeapObject::cast(obj);
 
   MapWord map_word = heap_obj->map_word();
   if (map_word.IsForwardingAddress()) {
-    ASSERT(MarkCompactCollector::IsOnEvacuationCandidate(*slot));
-    *slot = map_word.ToForwardingAddress();
-    ASSERT(!MarkCompactCollector::IsOnEvacuationCandidate(*slot));
+    //ASSERT(MarkCompactCollector::IsOnEvacuationCandidate(*slot));
+    SETOBJPTR(slot, map_word.ToForwardingAddress());
+    //ASSERT(!MarkCompactCollector::IsOnEvacuationCandidate(*slot));
   }
 }
 
