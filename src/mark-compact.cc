@@ -295,6 +295,22 @@ bool MarkCompactCollector::StartCompaction() {
 }
 
 
+void MarkCompactCollector::AbortCompaction() {
+  if (compacting_) {
+    int npages = evacuation_candidates_.length();
+    for (int i = 0; i < npages; i++) {
+      Page* p = evacuation_candidates_[i];
+      slots_buffer_allocator_.DeallocateChain(p->slots_buffer_address());
+      p->ClearEvacuationCandidate();
+      p->ClearFlag(MemoryChunk::RESCAN_ON_EVACUATION);
+    }
+    compacting_ = false;
+    evacuation_candidates_.Rewind(0);
+  }
+  ASSERT_EQ(0, evacuation_candidates_.length());
+}
+
+
 void MarkCompactCollector::CollectGarbage() {
   // Make sure that Prepare() has been called. The individual steps below will
   // update the state as they proceed.
@@ -515,6 +531,7 @@ void MarkCompactCollector::Prepare(GCTracer* tracer) {
   if (heap()->incremental_marking()->IsMarking() && PreciseSweepingRequired()) {
     heap()->incremental_marking()->Abort();
     ClearMarkbits(heap_);
+    AbortCompaction();
   }
 
   if (!FLAG_never_compact) StartCompaction();
@@ -1662,7 +1679,7 @@ void MarkCompactCollector::CreateBackPointers() {
        next_object != NULL; next_object = iterator.Next()) {
     if (next_object->IsMap()) {  // Could also be FreeSpace object on free list.
       Map* map = Map::cast(next_object);
-      STATIC_ASSERT(LAST_TYPE == LAST_CALLABLE_SPEC_OBJECT_TYPE);
+      STATIC_ASSERT(LAST_TYPE == LAST_JS_RECEIVER_TYPE);
       if (map->instance_type() >= FIRST_JS_RECEIVER_TYPE) {
         map->CreateBackPointers();
       } else {
@@ -2182,7 +2199,7 @@ void MarkCompactCollector::ReattachInitialMaps() {
     if (obj->IsFreeSpace()) continue;
     Map* map = Map::cast(obj);
 
-    STATIC_ASSERT(LAST_TYPE == LAST_CALLABLE_SPEC_OBJECT_TYPE);
+    STATIC_ASSERT(LAST_TYPE == LAST_JS_RECEIVER_TYPE);
     if (map->instance_type() < FIRST_JS_RECEIVER_TYPE) continue;
 
     if (map->attached_to_shared_function_info()) {
@@ -2212,8 +2229,8 @@ void MarkCompactCollector::ClearNonLiveTransitions() {
 
     ASSERT(map->IsMap());
     // Only JSObject and subtypes have map transitions and back pointers.
-    STATIC_ASSERT(LAST_TYPE == LAST_CALLABLE_SPEC_OBJECT_TYPE);
-    if (map->instance_type() < FIRST_JS_RECEIVER_TYPE) continue;
+    STATIC_ASSERT(LAST_TYPE == LAST_JS_OBJECT_TYPE);
+    if (map->instance_type() < FIRST_JS_OBJECT_TYPE) continue;
 
     if (map_mark.Get() &&
         map->attached_to_shared_function_info()) {

@@ -824,7 +824,7 @@ void PagedSpace::Verify(ObjectVisitor* visitor) {
       ASSERT(object->address() + size <= top);
       end_of_previous_object = object->address() + size;
     }
-    CHECK_LE(black_size, page->LiveBytes());
+    // TODO(1672): Assert that black_size <= page->LiveBytes().
   }
   ASSERT(allocation_pointer_found_in_space);
 }
@@ -1313,7 +1313,7 @@ void SemiSpace::Verify() {
 
 void SemiSpace::AssertValidRange(Address start, Address end) {
   // Addresses belong to same semi-space
-  NewSpacePage* page = NewSpacePage::FromAddress(start);
+  NewSpacePage* page = NewSpacePage::FromLimit(start);
   NewSpacePage* end_page = NewSpacePage::FromLimit(end);
   SemiSpace* space = page->semi_space();
   CHECK_EQ(space, end_page->semi_space());
