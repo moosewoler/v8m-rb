@@ -137,8 +137,13 @@ namespace v8 {
 namespace internal {
 
 enum ElementsKind {
-  // The "fast" kind for tagged values. Must be first to make it possible
-  // to efficiently check maps if they have fast elements.
+  // The "fast" kind for elements that only contain SMI values. Must be first
+  // to make it possible to efficiently check maps for this kind.
+  FAST_SMI_ONLY_ELEMENTS,
+
+  // The "fast" kind for tagged values. Must be second to make it possible to
+  // efficiently check maps for this and the FAST_SMI_ONLY_ELEMENTS kind
+  // together at once.
   FAST_ELEMENTS,
 
   // The "fast" kind for unwrapped, non-tagged double values.
@@ -161,7 +166,7 @@ enum ElementsKind {
   // Derived constants from ElementsKind
   FIRST_EXTERNAL_ARRAY_ELEMENTS_KIND = EXTERNAL_BYTE_ELEMENTS,
   LAST_EXTERNAL_ARRAY_ELEMENTS_KIND = EXTERNAL_PIXEL_ELEMENTS,
-  FIRST_ELEMENTS_KIND = FAST_ELEMENTS,
+  FIRST_ELEMENTS_KIND = FAST_SMI_ONLY_ELEMENTS,
   LAST_ELEMENTS_KIND = EXTERNAL_PIXEL_ELEMENTS
 };
 
@@ -923,10 +928,6 @@ class Object : public MaybeObject {
                                            LookupResult* result,
                                            String* key,
                                            PropertyAttributes* attributes);
-  MUST_USE_RESULT MaybeObject* GetPropertyWithCallback(Object* receiver,
-                                                       Object* structure,
-                                                       String* name,
-                                                       Object* holder);
   MUST_USE_RESULT MaybeObject* GetPropertyWithDefinedGetter(Object* receiver,
                                                             JSFunction* getter);
 
@@ -1352,6 +1353,14 @@ class JSReceiver: public HeapObject {
                                                             Object* value);
 
   MUST_USE_RESULT MaybeObject* DeleteProperty(String* name, DeleteMode mode);
+  MUST_USE_RESULT MaybeObject* DeleteElement(uint32_t index, DeleteMode mode);
+
+  // Set the index'th array element.
+  // Can cause GC, or return failure if GC is required.
+  MUST_USE_RESULT MaybeObject* SetElement(uint32_t index,
+                                          Object* value,
+                                          StrictModeFlag strict_mode,
+                                          bool check_prototype);
 
   // Returns the class name ([[Class]] property in the specification).
   String* class_name();
@@ -1368,6 +1377,7 @@ class JSReceiver: public HeapObject {
   // Can cause a GC.
   inline bool HasProperty(String* name);
   inline bool HasLocalProperty(String* name);
+  inline bool HasElement(uint32_t index);
 
   // Return the object's prototype (might be Heap::null_value()).
   inline Object* GetPrototype();
@@ -1427,8 +1437,14 @@ class JSObject: public JSReceiver {
   MUST_USE_RESULT inline MaybeObject* ResetElements();
   inline ElementsKind GetElementsKind();
   inline ElementsAccessor* GetElementsAccessor();
+  inline bool HasFastSmiOnlyElements();
   inline bool HasFastElements();
+  // Returns if an object has either FAST_ELEMENT or FAST_SMI_ONLY_ELEMENT
+  // elements.  TODO(danno): Rename HasFastTypeElements to HasFastElements() and
+  // HasFastElements to HasFastObjectElements.
+  inline bool HasFastTypeElements();
   inline bool HasFastDoubleElements();
+  inline bool HasNonStrictArgumentsElements();
   inline bool HasDictionaryElements();
   inline bool HasExternalPixelElements();
   inline bool HasExternalArrayElements();
@@ -1455,6 +1471,10 @@ class JSObject: public JSReceiver {
   // As PrepareElementsForSort, but only on objects where elements is
   // a dictionary, and it will stay a dictionary.
   MUST_USE_RESULT MaybeObject* PrepareSlowElementsForSort(uint32_t limit);
+
+  MUST_USE_RESULT MaybeObject* GetPropertyWithCallback(Object* receiver,
+                                                       Object* structure,
+                                                       String* name);
 
   // Can cause GC.
   MUST_USE_RESULT MaybeObject* SetPropertyForResult(LookupResult* result,
@@ -1599,6 +1619,19 @@ class JSObject: public JSReceiver {
   // Tests for the fast common case for property enumeration.
   bool IsSimpleEnum();
 
+  inline void ValidateSmiOnlyElements();
+
+  // Makes sure that this object can contain non-smi Object as elements.
+  inline MaybeObject* EnsureCanContainNonSmiElements();
+
+  // Makes sure that this object can contain the specified elements.
+  inline MaybeObject* EnsureCanContainElements(Object** elements,
+                                               uint32_t count);
+  inline MaybeObject* EnsureCanContainElements(FixedArray* elements);
+  MaybeObject* EnsureCanContainElements(Arguments* arguments,
+                                        uint32_t first_arg,
+                                        uint32_t arg_count);
+
   // Do we want to keep the elements in fast case when increasing the
   // capacity?
   bool ShouldConvertToSlowElements(int new_capacity);
@@ -1612,7 +1645,6 @@ class JSObject: public JSReceiver {
   bool CanConvertToFastDoubleElements();
 
   // Tells whether the index'th element is present.
-  inline bool HasElement(uint32_t index);
   bool HasElementWithReceiver(JSReceiver* receiver, uint32_t index);
 
   // Computes the new capacity when expanding the elements of a JSObject.
@@ -1648,6 +1680,7 @@ class JSObject: public JSReceiver {
                                               Object* value,
                                               StrictModeFlag strict_mode,
                                               bool check_prototype);
+
   MUST_USE_RESULT MaybeObject* SetDictionaryElement(uint32_t index,
                                                     Object* value,
                                                     StrictModeFlag strict_mode,
@@ -1670,11 +1703,18 @@ class JSObject: public JSReceiver {
   // The undefined object if index is out of bounds.
   MaybeObject* GetElementWithInterceptor(Object* receiver, uint32_t index);
 
+  enum SetFastElementsCapacityMode {
+    kAllowSmiOnlyElements,
+    kDontAllowSmiOnlyElements
+  };
+
   // Replace the elements' backing store with fast elements of the given
   // capacity.  Update the length for JSArrays.  Returns the new backing
   // store.
-  MUST_USE_RESULT MaybeObject* SetFastElementsCapacityAndLength(int capacity,
-                                                                int length);
+  MUST_USE_RESULT MaybeObject* SetFastElementsCapacityAndLength(
+      int capacity,
+      int length,
+      SetFastElementsCapacityMode set_capacity_mode);
   MUST_USE_RESULT MaybeObject* SetFastDoubleElementsCapacityAndLength(
       int capacity,
       int length);
@@ -3972,14 +4012,22 @@ class Map: public HeapObject {
         (bit_field2() & kElementsKindMask) >> kElementsKindShift);
   }
 
+  // Tells whether the instance has fast elements that are only Smis.
+  inline bool has_fast_smi_only_elements() {
+    return elements_kind() == FAST_SMI_ONLY_ELEMENTS;
+  }
+
   // Tells whether the instance has fast elements.
-  // Equivalent to instance->GetElementsKind() == FAST_ELEMENTS.
   inline bool has_fast_elements() {
     return elements_kind() == FAST_ELEMENTS;
   }
 
   inline bool has_fast_double_elements() {
     return elements_kind() == FAST_DOUBLE_ELEMENTS;
+  }
+
+  inline bool has_non_strict_arguments_elements() {
+    return elements_kind() == NON_STRICT_ARGUMENTS_ELEMENTS;
   }
 
   inline bool has_external_array_elements() {
@@ -4229,7 +4277,7 @@ class Map: public HeapObject {
   static const int kStringWrapperSafeForDefaultValueOf = 2;
   static const int kAttachedToSharedFunctionInfo = 3;
   // No bits can be used after kElementsKindFirstBit, they are all reserved for
-  // storing ElementKind.  for anything other than storing the ElementKind.
+  // storing ElementKind.
   static const int kElementsKindShift = 4;
   static const int kElementsKindBitCount = 4;
 
@@ -4238,6 +4286,9 @@ class Map: public HeapObject {
       ((1 << (kElementsKindShift + kElementsKindBitCount)) - 1);
   static const int8_t kMaximumBitField2FastElementValue = static_cast<int8_t>(
       (FAST_ELEMENTS + 1) << Map::kElementsKindShift) - 1;
+  static const int8_t kMaximumBitField2FastSmiOnlyElementValue =
+      static_cast<int8_t>((FAST_SMI_ONLY_ELEMENTS + 1) <<
+                          Map::kElementsKindShift) - 1;
 
   // Bit positions for bit field 3
   static const int kIsShared = 0;
@@ -6630,24 +6681,47 @@ class JSProxy: public JSReceiver {
   static inline JSProxy* cast(Object* obj);
 
   bool HasPropertyWithHandler(String* name);
+  bool HasElementWithHandler(uint32_t index);
 
   MUST_USE_RESULT MaybeObject* GetPropertyWithHandler(
       Object* receiver,
       String* name);
+  MUST_USE_RESULT MaybeObject* GetElementWithHandler(
+      Object* receiver,
+      uint32_t index);
 
   MUST_USE_RESULT MaybeObject* SetPropertyWithHandler(
       String* name,
       Object* value,
       PropertyAttributes attributes,
       StrictModeFlag strict_mode);
+  MUST_USE_RESULT MaybeObject* SetElementWithHandler(
+      uint32_t index,
+      Object* value,
+      StrictModeFlag strict_mode);
+
+  // If the handler defines an accessor property, invoke its setter
+  // (or throw if only a getter exists) and set *found to true. Otherwise false.
+  MUST_USE_RESULT MaybeObject* SetPropertyWithHandlerIfDefiningSetter(
+      String* name,
+      Object* value,
+      PropertyAttributes attributes,
+      StrictModeFlag strict_mode,
+      bool* found);
 
   MUST_USE_RESULT MaybeObject* DeletePropertyWithHandler(
       String* name,
+      DeleteMode mode);
+  MUST_USE_RESULT MaybeObject* DeleteElementWithHandler(
+      uint32_t index,
       DeleteMode mode);
 
   MUST_USE_RESULT PropertyAttributes GetPropertyAttributeWithHandler(
       JSReceiver* receiver,
       String* name);
+  MUST_USE_RESULT PropertyAttributes GetElementAttributeWithHandler(
+      JSReceiver* receiver,
+      uint32_t index);
 
   // Turn this into an (empty) JSObject.
   void Fix();
@@ -6830,7 +6904,7 @@ class JSArray: public JSObject {
   MUST_USE_RESULT MaybeObject* Initialize(int capacity);
 
   // Set the content of the array to the content of storage.
-  inline void SetContent(FixedArray* storage);
+  inline MaybeObject* SetContent(FixedArray* storage);
 
   // Casting.
   static inline JSArray* cast(Object* obj);
