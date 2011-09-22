@@ -714,9 +714,7 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_WeakMapGet) {
   NoHandleAllocation ha;
   ASSERT(args.length() == 2);
   CONVERT_ARG_CHECKED(JSWeakMap, weakmap, 0);
-  // TODO(mstarzinger): Currently we cannot use JSProxy objects as keys
-  // because they cannot be cast to JSObject to get an identity hash code.
-  CONVERT_ARG_CHECKED(JSObject, key, 1);
+  CONVERT_ARG_CHECKED(JSReceiver, key, 1);
   return weakmap->table()->Lookup(*key);
 }
 
@@ -725,8 +723,7 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_WeakMapSet) {
   HandleScope scope(isolate);
   ASSERT(args.length() == 3);
   CONVERT_ARG_CHECKED(JSWeakMap, weakmap, 0);
-  // TODO(mstarzinger): See Runtime_WeakMapGet above.
-  CONVERT_ARG_CHECKED(JSObject, key, 1);
+  CONVERT_ARG_CHECKED(JSReceiver, key, 1);
   Handle<Object> value(args[2]);
   Handle<ObjectHashTable> table(weakmap->table());
   Handle<ObjectHashTable> new_table = PutIntoObjectHashTable(table, key, value);
@@ -4209,7 +4206,7 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_DefineOrRedefineAccessorProperty) {
   CONVERT_CHECKED(String, name, args[1]);
   CONVERT_CHECKED(Smi, flag_setter, args[2]);
   Object* fun = args[3];
-  RUNTIME_ASSERT(fun->IsJSFunction() || fun->IsUndefined());
+  RUNTIME_ASSERT(fun->IsSpecFunction() || fun->IsUndefined());
   CONVERT_CHECKED(Smi, flag_attr, args[4]);
   int unchecked = flag_attr->value();
   RUNTIME_ASSERT((unchecked & ~(READ_ONLY | DONT_ENUM | DONT_DELETE)) == 0);
@@ -8425,7 +8422,7 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_Apply) {
      argv[i] = Handle<Object>(object);
   }
 
-  bool threw = false;
+  bool threw;
   Handle<JSReceiver> hfun(fun);
   Handle<Object> hreceiver(receiver);
   Handle<Object> result = Execution::Call(
@@ -12960,7 +12957,7 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_GetFromCache) {
     Handle<Object> receiver(isolate->global_context()->global());
     // This handle is nor shared, nor used later, so it's safe.
     Object** argv[] = { key_handle.location() };
-    bool pending_exception = false;
+    bool pending_exception;
     value = Execution::Call(factory,
                             receiver,
                             1,

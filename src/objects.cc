@@ -205,8 +205,9 @@ MaybeObject* JSObject::GetPropertyWithCallback(Object* receiver,
   // __defineGetter__ callback
   if (structure->IsFixedArray()) {
     Object* getter = FixedArray::cast(structure)->get(kGetterIndex);
-    if (getter->IsJSFunction()) {
-      return GetPropertyWithDefinedGetter(receiver, JSFunction::cast(getter));
+    if (getter->IsSpecFunction()) {
+      // TODO(rossberg): nicer would be to cast to some JSCallable here...
+      return GetPropertyWithDefinedGetter(receiver, JSReceiver::cast(getter));
     }
     // Getter is not a function.
     return isolate->heap()->undefined_value();
@@ -261,17 +262,20 @@ bool JSProxy::HasElementWithHandler(uint32_t index) {
 
 
 MaybeObject* Object::GetPropertyWithDefinedGetter(Object* receiver,
-                                                  JSFunction* getter) {
+                                                  JSReceiver* getter) {
   HandleScope scope;
-  Handle<JSFunction> fun(JSFunction::cast(getter));
+  Handle<JSReceiver> fun(getter);
   Handle<Object> self(receiver);
 #ifdef ENABLE_DEBUGGER_SUPPORT
   Debug* debug = fun->GetHeap()->isolate()->debug();
   // Handle stepping into a getter if step into is active.
-  if (debug->StepInActive()) {
-    debug->HandleStepIn(fun, Handle<Object>::null(), 0, false);
+  // TODO(rossberg): should this apply to getters that are function proxies?
+  if (debug->StepInActive() && fun->IsJSFunction()) {
+    debug->HandleStepIn(
+        Handle<JSFunction>::cast(fun), Handle<Object>::null(), 0, false);
   }
 #endif
+
   bool has_pending_exception;
   Handle<Object> result =
       Execution::Call(fun, self, 0, NULL, &has_pending_exception);
@@ -1070,7 +1074,6 @@ void JSObject::JSObjectShortPrint(StringStream* accumulator) {
 
 
 void HeapObject::HeapObjectShortPrint(StringStream* accumulator) {
-  // if (!HEAP->InNewSpace(this)) PrintF("*", this);
   Heap* heap = GetHeap();
   if (!heap->Contains(this)) {
     accumulator->Add("!!!INVALID POINTER!!!");
@@ -1883,8 +1886,9 @@ MaybeObject* JSObject::SetPropertyWithCallback(Object* structure,
 
   if (structure->IsFixedArray()) {
     Object* setter = FixedArray::cast(structure)->get(kSetterIndex);
-    if (setter->IsJSFunction()) {
-     return SetPropertyWithDefinedSetter(JSFunction::cast(setter), value);
+    if (setter->IsSpecFunction()) {
+      // TODO(rossberg): nicer would be to cast to some JSCallable here...
+     return SetPropertyWithDefinedSetter(JSReceiver::cast(setter), value);
     } else {
       if (strict_mode == kNonStrictMode) {
         return value;
@@ -1903,17 +1907,19 @@ MaybeObject* JSObject::SetPropertyWithCallback(Object* structure,
 }
 
 
-MaybeObject* JSReceiver::SetPropertyWithDefinedSetter(JSFunction* setter,
+MaybeObject* JSReceiver::SetPropertyWithDefinedSetter(JSReceiver* setter,
                                                       Object* value) {
   Isolate* isolate = GetIsolate();
   Handle<Object> value_handle(value, isolate);
-  Handle<JSFunction> fun(JSFunction::cast(setter), isolate);
+  Handle<JSReceiver> fun(setter, isolate);
   Handle<JSReceiver> self(this, isolate);
 #ifdef ENABLE_DEBUGGER_SUPPORT
   Debug* debug = isolate->debug();
   // Handle stepping into a setter if step into is active.
-  if (debug->StepInActive()) {
-    debug->HandleStepIn(fun, Handle<Object>::null(), 0, false);
+  // TODO(rossberg): should this apply to getters that are function proxies?
+  if (debug->StepInActive() && fun->IsJSFunction()) {
+    debug->HandleStepIn(
+        Handle<JSFunction>::cast(fun), Handle<Object>::null(), 0, false);
   }
 #endif
   bool has_pending_exception;
@@ -2324,8 +2330,9 @@ MUST_USE_RESULT MaybeObject* JSProxy::SetPropertyWithHandlerIfDefiningSetter(
     ASSERT(!isolate->has_pending_exception());
     if (!setter->IsUndefined()) {
       // We have a setter -- invoke it.
+      // TODO(rossberg): nicer would be to cast to some JSCallable here...
       return proxy->SetPropertyWithDefinedSetter(
-          JSFunction::cast(*setter), *value);
+          JSReceiver::cast(*setter), *value);
     } else {
       Handle<String> get_name = isolate->factory()->LookupAsciiSymbol("get_");
       Handle<Object> getter(v8::internal::GetProperty(desc, get_name));
@@ -2483,7 +2490,7 @@ MUST_USE_RESULT Handle<Object> JSProxy::CallTrap(
   }
 
   Object*** argv = reinterpret_cast<Object***>(args);
-  bool threw = false;
+  bool threw;
   return Execution::Call(trap, handler, argc, argv, &threw);
 }
 
@@ -3140,7 +3147,7 @@ MaybeObject* JSObject::NormalizeElements() {
 }
 
 
-MaybeObject* JSObject::GetHiddenProperties(HiddenPropertiesFlag flag) {
+MaybeObject* JSObject::GetHiddenProperties(CreationFlag flag) {
   Isolate* isolate = GetIsolate();
   Heap* heap = isolate->heap();
   Object* holder = BypassGlobalProxy();
@@ -3180,7 +3187,35 @@ MaybeObject* JSObject::GetHiddenProperties(HiddenPropertiesFlag flag) {
 }
 
 
-MaybeObject* JSObject::GetIdentityHash(HiddenPropertiesFlag flag) {
+Smi* JSReceiver::GenerateIdentityHash() {
+  Isolate* isolate = GetIsolate();
+
+  int hash_value;
+  int attempts = 0;
+  do {
+    // Generate a random 32-bit hash value but limit range to fit
+    // within a smi.
+    hash_value = V8::Random(isolate) & Smi::kMaxValue;
+    attempts++;
+  } while (hash_value == 0 && attempts < 30);
+  hash_value = hash_value != 0 ? hash_value : 1;  // never return 0
+
+  return Smi::FromInt(hash_value);
+}
+
+
+MaybeObject* JSObject::SetIdentityHash(Object* hash, CreationFlag flag) {
+  JSObject* hidden_props;
+  MaybeObject* maybe = GetHiddenProperties(flag);
+  if (!maybe->To<JSObject>(&hidden_props)) return maybe;
+  maybe = hidden_props->SetLocalPropertyIgnoreAttributes(
+      GetHeap()->identity_hash_symbol(), hash, NONE);
+  if (maybe->IsFailure()) return maybe;
+  return this;
+}
+
+
+MaybeObject* JSObject::GetIdentityHash(CreationFlag flag) {
   Isolate* isolate = GetIsolate();
   Object* hidden_props_obj;
   { MaybeObject* maybe_obj = GetHiddenProperties(flag);
@@ -3204,22 +3239,22 @@ MaybeObject* JSObject::GetIdentityHash(HiddenPropertiesFlag flag) {
     }
   }
 
-  int hash_value;
-  int attempts = 0;
-  do {
-    // Generate a random 32-bit hash value but limit range to fit
-    // within a smi.
-    hash_value = V8::Random(isolate) & Smi::kMaxValue;
-    attempts++;
-  } while (hash_value == 0 && attempts < 30);
-  hash_value = hash_value != 0 ? hash_value : 1;  // never return 0
-
-  Smi* hash = Smi::FromInt(hash_value);
+  Smi* hash = GenerateIdentityHash();
   { MaybeObject* result = hidden_props->SetLocalPropertyIgnoreAttributes(
         hash_symbol,
         hash,
         static_cast<PropertyAttributes>(None));
     if (result->IsFailure()) return result;
+  }
+  return hash;
+}
+
+
+MaybeObject* JSProxy::GetIdentityHash(CreationFlag flag) {
+  Object* hash = this->hash();
+  if (!hash->IsSmi() && flag == ALLOW_CREATION) {
+    hash = GenerateIdentityHash();
+    set_hash(hash);
   }
   return hash;
 }
@@ -3950,7 +3985,7 @@ MaybeObject* JSObject::DefineAccessor(String* name,
                                       bool is_getter,
                                       Object* fun,
                                       PropertyAttributes attributes) {
-  ASSERT(fun->IsJSFunction() || fun->IsUndefined());
+  ASSERT(fun->IsSpecFunction() || fun->IsUndefined());
   Isolate* isolate = GetIsolate();
   // Check access rights if needed.
   if (IsAccessCheckNeeded() &&
@@ -8391,8 +8426,9 @@ MaybeObject* JSObject::GetElementWithCallback(Object* receiver,
   // __defineGetter__ callback
   if (structure->IsFixedArray()) {
     Object* getter = FixedArray::cast(structure)->get(kGetterIndex);
-    if (getter->IsJSFunction()) {
-      return GetPropertyWithDefinedGetter(receiver, JSFunction::cast(getter));
+    if (getter->IsSpecFunction()) {
+      // TODO(rossberg): nicer would be to cast to some JSCallable here...
+      return GetPropertyWithDefinedGetter(receiver, JSReceiver::cast(getter));
     }
     // Getter is not a function.
     return isolate->heap()->undefined_value();
@@ -8447,8 +8483,9 @@ MaybeObject* JSObject::SetElementWithCallback(Object* structure,
 
   if (structure->IsFixedArray()) {
     Handle<Object> setter(FixedArray::cast(structure)->get(kSetterIndex));
-    if (setter->IsJSFunction()) {
-     return SetPropertyWithDefinedSetter(JSFunction::cast(*setter), value);
+    if (setter->IsSpecFunction()) {
+      // TODO(rossberg): nicer would be to cast to some JSCallable here...
+      return SetPropertyWithDefinedSetter(JSReceiver::cast(*setter), value);
     } else {
       if (strict_mode == kNonStrictMode) {
         return value;
@@ -11543,9 +11580,9 @@ MaybeObject* StringDictionary::TransformPropertiesToFastFor(
 }
 
 
-Object* ObjectHashTable::Lookup(JSObject* key) {
+Object* ObjectHashTable::Lookup(JSReceiver* key) {
   // If the object does not have an identity hash, it was never used as a key.
-  MaybeObject* maybe_hash = key->GetIdentityHash(JSObject::OMIT_CREATION);
+  MaybeObject* maybe_hash = key->GetIdentityHash(OMIT_CREATION);
   if (maybe_hash->IsFailure()) return GetHeap()->undefined_value();
   int entry = FindEntry(key);
   if (entry == kNotFound) return GetHeap()->undefined_value();
@@ -11553,10 +11590,10 @@ Object* ObjectHashTable::Lookup(JSObject* key) {
 }
 
 
-MaybeObject* ObjectHashTable::Put(JSObject* key, Object* value) {
+MaybeObject* ObjectHashTable::Put(JSReceiver* key, Object* value) {
   // Make sure the key object has an identity hash code.
   int hash;
-  { MaybeObject* maybe_hash = key->GetIdentityHash(JSObject::ALLOW_CREATION);
+  { MaybeObject* maybe_hash = key->GetIdentityHash(ALLOW_CREATION);
     if (maybe_hash->IsFailure()) return maybe_hash;
     hash = Smi::cast(maybe_hash->ToObjectUnchecked())->value();
   }
@@ -11586,7 +11623,7 @@ MaybeObject* ObjectHashTable::Put(JSObject* key, Object* value) {
 }
 
 
-void ObjectHashTable::AddEntry(int entry, JSObject* key, Object* value) {
+void ObjectHashTable::AddEntry(int entry, JSReceiver* key, Object* value) {
   set(EntryToIndex(entry), key);
   set(EntryToIndex(entry) + 1, value);
   ElementAdded();
