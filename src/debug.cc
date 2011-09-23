@@ -773,7 +773,7 @@ bool Debug::CompileDebuggerScript(int index) {
 
   // Execute the shared function in the debugger context.
   Handle<Context> context = isolate->global_context();
-  bool caught_exception = false;
+  bool caught_exception;
   Handle<JSFunction> function =
       factory->NewFunctionFromSharedFunctionInfo(function_info, context);
 
@@ -1104,7 +1104,7 @@ bool Debug::CheckBreakPoint(Handle<Object> break_point_object) {
   Handle<Object> break_id = factory->NewNumberFromInt(Debug::break_id());
 
   // Call HandleBreakPointx.
-  bool caught_exception = false;
+  bool caught_exception;
   const int argc = 2;
   Object** argv[argc] = {
     break_id.location(),
@@ -1733,6 +1733,10 @@ void Debug::PrepareForBreakPoints() {
   if (!has_break_points_) {
     Deoptimizer::DeoptimizeAll();
 
+    // We are going to iterate heap to find all functions without
+    // debug break slots.
+    isolate_->heap()->CollectAllGarbage(Heap::kMakeHeapIterableMask);
+
     AssertNoAllocation no_allocation;
     Builtins* builtins = isolate_->builtins();
     Code* lazy_compile = builtins->builtin(Builtins::kLazyCompile);
@@ -2349,7 +2353,7 @@ void Debugger::OnAfterCompile(Handle<Script> script,
   Handle<JSValue> wrapper = GetScriptWrapper(script);
 
   // Call UpdateScriptBreakPoints expect no exceptions.
-  bool caught_exception = false;
+  bool caught_exception;
   const int argc = 1;
   Object** argv[argc] = { reinterpret_cast<Object**>(wrapper.location()) };
   Execution::TryCall(Handle<JSFunction>::cast(update_script_break_points),
@@ -2490,7 +2494,7 @@ void Debugger::CallJSEventCallback(v8::DebugEvent event,
                           exec_state.location(),
                           Handle<Object>::cast(event_data).location(),
                           event_listener_data_.location() };
-  bool caught_exception = false;
+  bool caught_exception;
   Execution::TryCall(fun, isolate_->global(), argc, argv, &caught_exception);
   // Silently ignore exceptions from debug event listeners.
 }

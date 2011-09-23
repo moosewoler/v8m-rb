@@ -766,15 +766,6 @@ void PagedSpace::Shrink() {
 }
 
 
-bool PagedSpace::EnsureCapacity(int capacity) {
-  while (Capacity() < capacity) {
-    // Expand the space until it has the required capacity or expansion fails.
-    if (!Expand()) return false;
-  }
-  return true;
-}
-
-
 #ifdef DEBUG
 void PagedSpace::Print() { }
 #endif
@@ -824,7 +815,7 @@ void PagedSpace::Verify(ObjectVisitor* visitor) {
       ASSERT(object->address() + size <= top);
       end_of_previous_object = object->address() + size;
     }
-    CHECK_LE(black_size, page->LiveBytes());
+    // TODO(1672): Assert that black_size <= page->LiveBytes().
   }
   ASSERT(allocation_pointer_found_in_space);
 }
@@ -1313,7 +1304,7 @@ void SemiSpace::Verify() {
 
 void SemiSpace::AssertValidRange(Address start, Address end) {
   // Addresses belong to same semi-space
-  NewSpacePage* page = NewSpacePage::FromAddress(start);
+  NewSpacePage* page = NewSpacePage::FromLimit(start);
   NewSpacePage* end_page = NewSpacePage::FromLimit(end);
   SemiSpace* space = page->semi_space();
   CHECK_EQ(space, end_page->semi_space());
@@ -1930,8 +1921,10 @@ void PagedSpace::PrepareForMarkCompact() {
     Page* last = last_unswept_page_->next_page();
     Page* p = first_unswept_page_;
     do {
-      if (ShouldBeSweptLazily(p)) {
-        ASSERT(!p->WasSwept());
+      // Do not use ShouldBeSweptLazily predicate here.
+      // New evacuation candidates were selected but they still have
+      // to be swept before collection starts.
+      if (!p->WasSwept()) {
         Bitmap::Clear(p);
         if (FLAG_gc_verbose) {
           PrintF("Sweeping 0x%" V8PRIxPTR " lazily abandoned.\n",

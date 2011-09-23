@@ -34,6 +34,18 @@
 namespace v8 {
 namespace internal {
 
+#ifndef V8_TARGET_ARCH_MIPS
+#define GETOBJPTR(ptr) (*ptr)
+#define SETOBJPTR(ptr, target) (*ptr) = (target)
+#else
+#define GETOBJPTR(ptr) mipsgetaddr(reinterpret_cast<Object**>(ptr), __FILE__, __LINE__)
+#define SETOBJPTR(ptr, target) mipssetaddr(reinterpret_cast<Object**>(ptr), reinterpret_cast<Object*>(target), __FILE__, __LINE__)
+
+void mipssetaddr(Object** addr, Object* target, const char* file, unsigned line);
+Object* mipsgetaddr(Object** addr, const char* file, unsigned line);
+#endif
+
+
 // Callback function, returns whether an object is alive. The heap size
 // of the object is returned in size. It optionally updates the offset
 // to the first live object in the page (only used for old and map objects).
@@ -324,6 +336,8 @@ class SlotsBuffer {
 
   void UpdateSlots(Heap* heap);
 
+  void UpdateSlotsWithFilter(Heap* heap);
+
   SlotsBuffer* next() { return next_; }
 
   static int SizeOfChain(SlotsBuffer* buffer) {
@@ -340,9 +354,15 @@ class SlotsBuffer {
     return idx_ < kNumberOfElements - 1;
   }
 
-  static void UpdateSlotsRecordedIn(Heap* heap, SlotsBuffer* buffer) {
+  static void UpdateSlotsRecordedIn(Heap* heap,
+                                    SlotsBuffer* buffer,
+                                    bool code_slots_filtering_required) {
     while (buffer != NULL) {
-      buffer->UpdateSlots(heap);
+      if (code_slots_filtering_required) {
+        buffer->UpdateSlotsWithFilter(heap);
+      } else {
+        buffer->UpdateSlots(heap);
+      }
       buffer = buffer->next();
     }
   }
@@ -449,6 +469,8 @@ class MarkCompactCollector {
 
   bool StartCompaction();
 
+  void AbortCompaction();
+
   // During a full GC, there is a stack-allocated GCTracer that is used for
   // bookkeeping information.  Return a pointer to that tracer.
   GCTracer* tracer() { return tracer_; }
@@ -544,9 +566,16 @@ class MarkCompactCollector {
     encountered_weak_maps_ = weak_map;
   }
 
+  void InvalidateCode(Code* code);
+
  private:
   MarkCompactCollector();
   ~MarkCompactCollector();
+
+  bool MarkInvalidatedCode();
+  void RemoveDeadInvalidatedCode();
+  void ProcessInvalidatedCode(ObjectVisitor* visitor);
+
 
 #ifdef DEBUG
   enum CollectorState {
@@ -570,6 +599,8 @@ class MarkCompactCollector {
   // True if we are collecting slots to perform evacuation from evacuation
   // candidates.
   bool compacting_;
+
+  bool was_marked_incrementally_;
 
   bool collect_maps_;
 
@@ -760,6 +791,7 @@ class MarkCompactCollector {
   Object* encountered_weak_maps_;
 
   List<Page*> evacuation_candidates_;
+  List<Code*> invalidated_code_;
 
   friend class Heap;
 };

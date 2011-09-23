@@ -495,6 +495,7 @@ class Heap {
   // size, but keeping the original prototype.  The receiver must have at least
   // the size of the new object.  The object is reinitialized and behaves as an
   // object that has been freshly allocated.
+  // Returns failure if an error occured, otherwise object.
   MUST_USE_RESULT MaybeObject* ReinitializeJSReceiver(JSReceiver* object,
                                                       InstanceType type,
                                                       int size);
@@ -523,8 +524,10 @@ class Heap {
   // Returns Failure::RetryAfterGC(requested_bytes, space) if the allocation
   // failed.
   // Please note this function does not perform a garbage collection.
-  MUST_USE_RESULT MaybeObject* AllocateMap(InstanceType instance_type,
-                                           int instance_size);
+  MUST_USE_RESULT MaybeObject* AllocateMap(
+      InstanceType instance_type,
+      int instance_size,
+      ElementsKind elements_kind = FAST_ELEMENTS);
 
   // Allocates a partial map for bootstrapping.
   MUST_USE_RESULT MaybeObject* AllocatePartialMap(InstanceType instance_type,
@@ -835,9 +838,9 @@ class Heap {
   // failed.
   // Please note this does not perform a garbage collection.
   MUST_USE_RESULT MaybeObject* AllocateExternalStringFromAscii(
-      ExternalAsciiString::Resource* resource);
+      const ExternalAsciiString::Resource* resource);
   MUST_USE_RESULT MaybeObject* AllocateExternalStringFromTwoByte(
-      ExternalTwoByteString::Resource* resource);
+      const ExternalTwoByteString::Resource* resource);
 
   // Finalizes an external string by deleting the associated external
   // data and clearing the resource pointer.
@@ -1291,6 +1294,8 @@ class Heap {
 
   MUST_USE_RESULT MaybeObject* NumberToString(
       Object* number, bool check_number_string_cache = true);
+  MUST_USE_RESULT MaybeObject* Uint32ToString(
+      uint32_t value, bool check_number_string_cache = true);
 
   Map* MapForExternalArrayType(ExternalArrayType array_type);
   RootListIndex RootIndexForExternalArrayType(

@@ -185,7 +185,10 @@ void i::V8::FatalProcessOutOfMemory(const char* location, bool take_snapshot) {
   int end_marker;
   heap_stats.end_marker = &end_marker;
   i::Isolate* isolate = i::Isolate::Current();
-  isolate->heap()->RecordStats(&heap_stats, take_snapshot);
+  // BUG(1718):
+  // Don't use the take_snapshot since we don't support HeapIterator here
+  // without doing a special GC.
+  isolate->heap()->RecordStats(&heap_stats, false);
   i::V8::SetFatalError();
   FatalErrorCallback callback = GetFatalErrorHandler();
   {
@@ -501,9 +504,12 @@ void RegisterExtension(Extension* that) {
 Extension::Extension(const char* name,
                      const char* source,
                      int dep_count,
-                     const char** deps)
+                     const char** deps,
+                     int source_length)
     : name_(name),
-      source_(source),
+      source_length_(source_length >= 0 ?
+                  source_length : (source ? strlen(source) : 0)),
+      source_(source, source_length_),
       dep_count_(dep_count),
       deps_(deps),
       auto_enable_(false) { }
@@ -3206,7 +3212,7 @@ bool v8::Object::SetHiddenValue(v8::Handle<v8::String> key,
   i::Handle<i::JSObject> self = Utils::OpenHandle(this);
   i::Handle<i::Object> hidden_props(i::GetHiddenProperties(
       self,
-      i::JSObject::ALLOW_CREATION));
+      i::ALLOW_CREATION));
   i::Handle<i::Object> key_obj = Utils::OpenHandle(*key);
   i::Handle<i::Object> value_obj = Utils::OpenHandle(*value);
   EXCEPTION_PREAMBLE(isolate);
@@ -3230,7 +3236,7 @@ v8::Local<v8::Value> v8::Object::GetHiddenValue(v8::Handle<v8::String> key) {
   i::Handle<i::JSObject> self = Utils::OpenHandle(this);
   i::Handle<i::Object> hidden_props(i::GetHiddenProperties(
       self,
-      i::JSObject::OMIT_CREATION));
+      i::OMIT_CREATION));
   if (hidden_props->IsUndefined()) {
     return v8::Local<v8::Value>();
   }
@@ -3254,7 +3260,7 @@ bool v8::Object::DeleteHiddenValue(v8::Handle<v8::String> key) {
   i::Handle<i::JSObject> self = Utils::OpenHandle(this);
   i::Handle<i::Object> hidden_props(i::GetHiddenProperties(
       self,
-      i::JSObject::OMIT_CREATION));
+      i::OMIT_CREATION));
   if (hidden_props->IsUndefined()) {
     return true;
   }
@@ -3789,10 +3795,11 @@ bool v8::String::IsExternalAscii() const {
 void v8::String::VerifyExternalStringResource(
     v8::String::ExternalStringResource* value) const {
   i::Handle<i::String> str = Utils::OpenHandle(this);
-  v8::String::ExternalStringResource* expected;
+  const v8::String::ExternalStringResource* expected;
   if (i::StringShape(*str).IsExternalTwoByte()) {
-    void* resource = i::Handle<i::ExternalTwoByteString>::cast(str)->resource();
-    expected = reinterpret_cast<ExternalStringResource*>(resource);
+    const void* resource =
+        i::Handle<i::ExternalTwoByteString>::cast(str)->resource();
+    expected = reinterpret_cast<const ExternalStringResource*>(resource);
   } else {
     expected = NULL;
   }
@@ -3800,7 +3807,7 @@ void v8::String::VerifyExternalStringResource(
 }
 
 
-v8::String::ExternalAsciiStringResource*
+const v8::String::ExternalAsciiStringResource*
       v8::String::GetExternalAsciiStringResource() const {
   i::Handle<i::String> str = Utils::OpenHandle(this);
   if (IsDeadCheck(str->GetIsolate(),
@@ -3808,8 +3815,9 @@ v8::String::ExternalAsciiStringResource*
     return NULL;
   }
   if (i::StringShape(*str).IsExternalAscii()) {
-    void* resource = i::Handle<i::ExternalAsciiString>::cast(str)->resource();
-    return reinterpret_cast<ExternalAsciiStringResource*>(resource);
+    const void* resource =
+        i::Handle<i::ExternalAsciiString>::cast(str)->resource();
+    return reinterpret_cast<const ExternalAsciiStringResource*>(resource);
   } else {
     return NULL;
   }
@@ -5469,6 +5477,12 @@ bool Debug::EnableAgent(const char* name, int port, bool wait_for_connection) {
   return i::Isolate::Current()->debugger()->StartAgent(name, port,
                                                        wait_for_connection);
 }
+
+
+void Debug::DisableAgent() {
+  return i::Isolate::Current()->debugger()->StopAgent();
+}
+
 
 void Debug::ProcessDebugMessages() {
   i::Execution::ProcessDebugMesssages(true);

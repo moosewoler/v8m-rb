@@ -137,8 +137,13 @@ namespace v8 {
 namespace internal {
 
 enum ElementsKind {
-  // The "fast" kind for tagged values. Must be first to make it possible
-  // to efficiently check maps if they have fast elements.
+  // The "fast" kind for elements that only contain SMI values. Must be first
+  // to make it possible to efficiently check maps for this kind.
+  FAST_SMI_ONLY_ELEMENTS,
+
+  // The "fast" kind for tagged values. Must be second to make it possible to
+  // efficiently check maps for this and the FAST_SMI_ONLY_ELEMENTS kind
+  // together at once.
   FAST_ELEMENTS,
 
   // The "fast" kind for unwrapped, non-tagged double values.
@@ -161,7 +166,7 @@ enum ElementsKind {
   // Derived constants from ElementsKind
   FIRST_EXTERNAL_ARRAY_ELEMENTS_KIND = EXTERNAL_BYTE_ELEMENTS,
   LAST_EXTERNAL_ARRAY_ELEMENTS_KIND = EXTERNAL_PIXEL_ELEMENTS,
-  FIRST_ELEMENTS_KIND = FAST_ELEMENTS,
+  FIRST_ELEMENTS_KIND = FAST_SMI_ONLY_ELEMENTS,
   LAST_ELEMENTS_KIND = EXTERNAL_PIXEL_ELEMENTS
 };
 
@@ -274,6 +279,13 @@ enum PropertyNormalizationMode {
 enum NormalizedMapSharingMode {
   UNIQUE_NORMALIZED_MAP,
   SHARED_NORMALIZED_MAP
+};
+
+
+// Indicates whether a get method should implicitly create the object looked up.
+enum CreationFlag {
+  ALLOW_CREATION,
+  OMIT_CREATION
 };
 
 
@@ -624,24 +636,30 @@ enum InstanceType {
 
   JS_MESSAGE_OBJECT_TYPE,
 
-  JS_VALUE_TYPE,  // FIRST_NON_CALLABLE_OBJECT_TYPE, FIRST_JS_RECEIVER_TYPE
+  // All the following types are subtypes of JSReceiver, which corresponds to
+  // objects in the JS sense. The first and the last type in this range are
+  // the two forms of function. This organization enables using the same
+  // compares for checking the JS_RECEIVER/SPEC_OBJECT range and the
+  // NONCALLABLE_JS_OBJECT range.
+  JS_FUNCTION_PROXY_TYPE,  // FIRST_JS_RECEIVER_TYPE, FIRST_JS_PROXY_TYPE
+  JS_PROXY_TYPE,  // LAST_JS_PROXY_TYPE
+
+  JS_VALUE_TYPE,  // FIRST_JS_OBJECT_TYPE
   JS_OBJECT_TYPE,
   JS_CONTEXT_EXTENSION_OBJECT_TYPE,
   JS_GLOBAL_OBJECT_TYPE,
   JS_BUILTINS_OBJECT_TYPE,
   JS_GLOBAL_PROXY_TYPE,
   JS_ARRAY_TYPE,
-  JS_PROXY_TYPE,
   JS_WEAK_MAP_TYPE,
 
-  JS_REGEXP_TYPE,  // LAST_NONCALLABLE_SPEC_OBJECT_TYPE
+  JS_REGEXP_TYPE,
 
-  JS_FUNCTION_TYPE,  // FIRST_CALLABLE_SPEC_OBJECT_TYPE
-  JS_FUNCTION_PROXY_TYPE,  // LAST_CALLABLE_SPEC_OBJECT_TYPE
+  JS_FUNCTION_TYPE,  // LAST_JS_OBJECT_TYPE, LAST_JS_RECEIVER_TYPE
 
   // Pseudo-types
   FIRST_TYPE = 0x0,
-  LAST_TYPE = JS_FUNCTION_PROXY_TYPE,
+  LAST_TYPE = JS_FUNCTION_TYPE,
   INVALID_TYPE = FIRST_TYPE - 1,
   FIRST_NONSTRING_TYPE = MAP_TYPE,
   // Boundaries for testing for an external array.
@@ -654,17 +672,23 @@ enum InstanceType {
   // are not continuous in this enum! The enum ranges instead reflect the
   // external class names, where proxies are treated as either ordinary objects,
   // or functions.
-  FIRST_JS_RECEIVER_TYPE = JS_VALUE_TYPE,
+  FIRST_JS_RECEIVER_TYPE = JS_FUNCTION_PROXY_TYPE,
   LAST_JS_RECEIVER_TYPE = LAST_TYPE,
-  // Boundaries for testing the types for which typeof is "object".
-  FIRST_NONCALLABLE_SPEC_OBJECT_TYPE = JS_VALUE_TYPE,
-  LAST_NONCALLABLE_SPEC_OBJECT_TYPE = JS_REGEXP_TYPE,
-  // Boundaries for testing the types for which typeof is "function".
-  FIRST_CALLABLE_SPEC_OBJECT_TYPE = JS_FUNCTION_TYPE,
-  LAST_CALLABLE_SPEC_OBJECT_TYPE = JS_FUNCTION_PROXY_TYPE,
+  // Boundaries for testing the types represented as JSObject
+  FIRST_JS_OBJECT_TYPE = JS_VALUE_TYPE,
+  LAST_JS_OBJECT_TYPE = LAST_TYPE,
+  // Boundaries for testing the types represented as JSProxy
+  FIRST_JS_PROXY_TYPE = JS_FUNCTION_PROXY_TYPE,
+  LAST_JS_PROXY_TYPE = JS_PROXY_TYPE,
   // Boundaries for testing whether the type is a JavaScript object.
-  FIRST_SPEC_OBJECT_TYPE = FIRST_NONCALLABLE_SPEC_OBJECT_TYPE,
-  LAST_SPEC_OBJECT_TYPE = LAST_CALLABLE_SPEC_OBJECT_TYPE
+  FIRST_SPEC_OBJECT_TYPE = FIRST_JS_RECEIVER_TYPE,
+  LAST_SPEC_OBJECT_TYPE = LAST_JS_RECEIVER_TYPE,
+  // Boundaries for testing the types for which typeof is "object".
+  FIRST_NONCALLABLE_SPEC_OBJECT_TYPE = JS_PROXY_TYPE,
+  LAST_NONCALLABLE_SPEC_OBJECT_TYPE = JS_REGEXP_TYPE,
+  // Note that the types for which typeof is "function" are not continuous.
+  // Define this so that we can put assertions on discrete checks.
+  NUM_OF_CALLABLE_SPEC_OBJECT_TYPES = 2
 };
 
 static const int kExternalArrayTypeCount = LAST_EXTERNAL_ARRAY_TYPE -
@@ -839,6 +863,9 @@ class MaybeObject BASE_EMBEDDED {
   V(AccessCheckNeeded)                         \
   V(JSGlobalPropertyCell)                      \
 
+
+class JSReceiver;
+
 // Object is the abstract superclass for all classes in the
 // object hierarchy.
 // Object does not use any virtual functions to avoid the
@@ -863,6 +890,7 @@ class Object : public MaybeObject {
 #undef DECLARE_STRUCT_PREDICATE
 
   INLINE(bool IsSpecObject());
+  INLINE(bool IsSpecFunction());
 
   // Oddball testing.
   INLINE(bool IsUndefined());
@@ -911,12 +939,8 @@ class Object : public MaybeObject {
                                            LookupResult* result,
                                            String* key,
                                            PropertyAttributes* attributes);
-  MUST_USE_RESULT MaybeObject* GetPropertyWithCallback(Object* receiver,
-                                                       Object* structure,
-                                                       String* name,
-                                                       Object* holder);
   MUST_USE_RESULT MaybeObject* GetPropertyWithDefinedGetter(Object* receiver,
-                                                            JSFunction* getter);
+                                                            JSReceiver* getter);
 
   inline MaybeObject* GetElement(uint32_t index);
   // For use when we know that no exception can be thrown.
@@ -1336,10 +1360,18 @@ class JSReceiver: public HeapObject {
                                            Object* value,
                                            PropertyAttributes attributes,
                                            StrictModeFlag strict_mode);
-  MUST_USE_RESULT MaybeObject* SetPropertyWithDefinedSetter(JSFunction* setter,
+  MUST_USE_RESULT MaybeObject* SetPropertyWithDefinedSetter(JSReceiver* setter,
                                                             Object* value);
 
   MUST_USE_RESULT MaybeObject* DeleteProperty(String* name, DeleteMode mode);
+  MUST_USE_RESULT MaybeObject* DeleteElement(uint32_t index, DeleteMode mode);
+
+  // Set the index'th array element.
+  // Can cause GC, or return failure if GC is required.
+  MUST_USE_RESULT MaybeObject* SetElement(uint32_t index,
+                                          Object* value,
+                                          StrictModeFlag strict_mode,
+                                          bool check_prototype);
 
   // Returns the class name ([[Class]] property in the specification).
   String* class_name();
@@ -1356,6 +1388,7 @@ class JSReceiver: public HeapObject {
   // Can cause a GC.
   inline bool HasProperty(String* name);
   inline bool HasLocalProperty(String* name);
+  inline bool HasElement(uint32_t index);
 
   // Return the object's prototype (might be Heap::null_value()).
   inline Object* GetPrototype();
@@ -1364,10 +1397,17 @@ class JSReceiver: public HeapObject {
   MUST_USE_RESULT MaybeObject* SetPrototype(Object* value,
                                             bool skip_hidden_prototypes);
 
+  // Retrieves a permanent object identity hash code. The undefined value might
+  // be returned in case no has been created yet and OMIT_CREATION was used.
+  inline MUST_USE_RESULT MaybeObject* GetIdentityHash(CreationFlag flag);
+
   // Lookup a property.  If found, the result is valid and has
   // detailed information.
   void LocalLookup(String* name, LookupResult* result);
   void Lookup(String* name, LookupResult* result);
+
+ protected:
+  Smi* GenerateIdentityHash();
 
  private:
   PropertyAttributes GetPropertyAttribute(JSReceiver* receiver,
@@ -1415,8 +1455,14 @@ class JSObject: public JSReceiver {
   MUST_USE_RESULT inline MaybeObject* ResetElements();
   inline ElementsKind GetElementsKind();
   inline ElementsAccessor* GetElementsAccessor();
+  inline bool HasFastSmiOnlyElements();
   inline bool HasFastElements();
+  // Returns if an object has either FAST_ELEMENT or FAST_SMI_ONLY_ELEMENT
+  // elements.  TODO(danno): Rename HasFastTypeElements to HasFastElements() and
+  // HasFastElements to HasFastObjectElements.
+  inline bool HasFastTypeElements();
   inline bool HasFastDoubleElements();
+  inline bool HasNonStrictArgumentsElements();
   inline bool HasDictionaryElements();
   inline bool HasExternalPixelElements();
   inline bool HasExternalArrayElements();
@@ -1443,6 +1489,10 @@ class JSObject: public JSReceiver {
   // As PrepareElementsForSort, but only on objects where elements is
   // a dictionary, and it will stay a dictionary.
   MUST_USE_RESULT MaybeObject* PrepareSlowElementsForSort(uint32_t limit);
+
+  MUST_USE_RESULT MaybeObject* GetPropertyWithCallback(Object* receiver,
+                                                       Object* structure,
+                                                       String* name);
 
   // Can cause GC.
   MUST_USE_RESULT MaybeObject* SetPropertyForResult(LookupResult* result,
@@ -1564,28 +1614,34 @@ class JSObject: public JSReceiver {
   MUST_USE_RESULT inline MaybeObject* SetHiddenPropertiesObject(
       Object* hidden_obj);
 
-  // Indicates whether the hidden properties object should be created.
-  enum HiddenPropertiesFlag { ALLOW_CREATION, OMIT_CREATION };
-
   // Retrieves the hidden properties object.
   //
   // The undefined value might be returned in case no hidden properties object
   // is present and creation was omitted.
   inline bool HasHiddenProperties();
-  MUST_USE_RESULT MaybeObject* GetHiddenProperties(HiddenPropertiesFlag flag);
+  MUST_USE_RESULT MaybeObject* GetHiddenProperties(CreationFlag flag);
 
-  // Retrieves a permanent object identity hash code.
-  //
-  // The identity hash is stored as a hidden property. The undefined value might
-  // be returned in case no hidden properties object is present and creation was
-  // omitted.
-  MUST_USE_RESULT MaybeObject* GetIdentityHash(HiddenPropertiesFlag flag);
+  MUST_USE_RESULT MaybeObject* GetIdentityHash(CreationFlag flag);
+  MUST_USE_RESULT MaybeObject* SetIdentityHash(Object* hash, CreationFlag flag);
 
   MUST_USE_RESULT MaybeObject* DeleteProperty(String* name, DeleteMode mode);
   MUST_USE_RESULT MaybeObject* DeleteElement(uint32_t index, DeleteMode mode);
 
   // Tests for the fast common case for property enumeration.
   bool IsSimpleEnum();
+
+  inline void ValidateSmiOnlyElements();
+
+  // Makes sure that this object can contain non-smi Object as elements.
+  inline MaybeObject* EnsureCanContainNonSmiElements();
+
+  // Makes sure that this object can contain the specified elements.
+  inline MaybeObject* EnsureCanContainElements(Object** elements,
+                                               uint32_t count);
+  inline MaybeObject* EnsureCanContainElements(FixedArray* elements);
+  MaybeObject* EnsureCanContainElements(Arguments* arguments,
+                                        uint32_t first_arg,
+                                        uint32_t arg_count);
 
   // Do we want to keep the elements in fast case when increasing the
   // capacity?
@@ -1600,7 +1656,6 @@ class JSObject: public JSReceiver {
   bool CanConvertToFastDoubleElements();
 
   // Tells whether the index'th element is present.
-  inline bool HasElement(uint32_t index);
   bool HasElementWithReceiver(JSReceiver* receiver, uint32_t index);
 
   // Computes the new capacity when expanding the elements of a JSObject.
@@ -1636,6 +1691,7 @@ class JSObject: public JSReceiver {
                                               Object* value,
                                               StrictModeFlag strict_mode,
                                               bool check_prototype);
+
   MUST_USE_RESULT MaybeObject* SetDictionaryElement(uint32_t index,
                                                     Object* value,
                                                     StrictModeFlag strict_mode,
@@ -1658,11 +1714,18 @@ class JSObject: public JSReceiver {
   // The undefined object if index is out of bounds.
   MaybeObject* GetElementWithInterceptor(Object* receiver, uint32_t index);
 
+  enum SetFastElementsCapacityMode {
+    kAllowSmiOnlyElements,
+    kDontAllowSmiOnlyElements
+  };
+
   // Replace the elements' backing store with fast elements of the given
   // capacity.  Update the length for JSArrays.  Returns the new backing
   // store.
-  MUST_USE_RESULT MaybeObject* SetFastElementsCapacityAndLength(int capacity,
-                                                                int length);
+  MUST_USE_RESULT MaybeObject* SetFastElementsCapacityAndLength(
+      int capacity,
+      int length,
+      SetFastElementsCapacityMode set_capacity_mode);
   MUST_USE_RESULT MaybeObject* SetFastDoubleElementsCapacityAndLength(
       int capacity,
       int length);
@@ -2873,10 +2936,10 @@ class NumberDictionary: public Dictionary<NumberDictionaryShape, uint32_t> {
 
 class ObjectHashTableShape {
  public:
-  static inline bool IsMatch(JSObject* key, Object* other);
-  static inline uint32_t Hash(JSObject* key);
-  static inline uint32_t HashForObject(JSObject* key, Object* object);
-  MUST_USE_RESULT static inline MaybeObject* AsObject(JSObject* key);
+  static inline bool IsMatch(JSReceiver* key, Object* other);
+  static inline uint32_t Hash(JSReceiver* key);
+  static inline uint32_t HashForObject(JSReceiver* key, Object* object);
+  MUST_USE_RESULT static inline MaybeObject* AsObject(JSReceiver* key);
   static const int kPrefixSize = 0;
   static const int kEntrySize = 2;
 };
@@ -2884,7 +2947,7 @@ class ObjectHashTableShape {
 
 // ObjectHashTable maps keys that are JavaScript objects to object values by
 // using the identity hash of the key for hashing purposes.
-class ObjectHashTable: public HashTable<ObjectHashTableShape, JSObject*> {
+class ObjectHashTable: public HashTable<ObjectHashTableShape, JSReceiver*> {
  public:
   static inline ObjectHashTable* cast(Object* obj) {
     ASSERT(obj->IsHashTable());
@@ -2893,16 +2956,16 @@ class ObjectHashTable: public HashTable<ObjectHashTableShape, JSObject*> {
 
   // Looks up the value associated with the given key. The undefined value is
   // returned in case the key is not present.
-  Object* Lookup(JSObject* key);
+  Object* Lookup(JSReceiver* key);
 
   // Adds (or overwrites) the value associated with the given key. Mapping a
   // key to the undefined value causes removal of the whole entry.
-  MUST_USE_RESULT MaybeObject* Put(JSObject* key, Object* value);
+  MUST_USE_RESULT MaybeObject* Put(JSReceiver* key, Object* value);
 
  private:
   friend class MarkCompactCollector;
 
-  void AddEntry(int entry, JSObject* key, Object* value);
+  void AddEntry(int entry, JSReceiver* key, Object* value);
   void RemoveEntry(int entry, Heap* heap);
   inline void RemoveEntry(int entry);
 
@@ -3960,14 +4023,22 @@ class Map: public HeapObject {
         (bit_field2() & kElementsKindMask) >> kElementsKindShift);
   }
 
+  // Tells whether the instance has fast elements that are only Smis.
+  inline bool has_fast_smi_only_elements() {
+    return elements_kind() == FAST_SMI_ONLY_ELEMENTS;
+  }
+
   // Tells whether the instance has fast elements.
-  // Equivalent to instance->GetElementsKind() == FAST_ELEMENTS.
   inline bool has_fast_elements() {
     return elements_kind() == FAST_ELEMENTS;
   }
 
   inline bool has_fast_double_elements() {
     return elements_kind() == FAST_DOUBLE_ELEMENTS;
+  }
+
+  inline bool has_non_strict_arguments_elements() {
+    return elements_kind() == NON_STRICT_ARGUMENTS_ELEMENTS;
   }
 
   inline bool has_external_array_elements() {
@@ -4217,7 +4288,7 @@ class Map: public HeapObject {
   static const int kStringWrapperSafeForDefaultValueOf = 2;
   static const int kAttachedToSharedFunctionInfo = 3;
   // No bits can be used after kElementsKindFirstBit, they are all reserved for
-  // storing ElementKind.  for anything other than storing the ElementKind.
+  // storing ElementKind.
   static const int kElementsKindShift = 4;
   static const int kElementsKindBitCount = 4;
 
@@ -4226,6 +4297,9 @@ class Map: public HeapObject {
       ((1 << (kElementsKindShift + kElementsKindBitCount)) - 1);
   static const int8_t kMaximumBitField2FastElementValue = static_cast<int8_t>(
       (FAST_ELEMENTS + 1) << Map::kElementsKindShift) - 1;
+  static const int8_t kMaximumBitField2FastSmiOnlyElementValue =
+      static_cast<int8_t>((FAST_SMI_ONLY_ELEMENTS + 1) <<
+                          Map::kElementsKindShift) - 1;
 
   // Bit positions for bit field 3
   static const int kIsShared = 0;
@@ -6379,8 +6453,8 @@ class ExternalAsciiString: public ExternalString {
   typedef v8::String::ExternalAsciiStringResource Resource;
 
   // The underlying resource.
-  inline Resource* resource();
-  inline void set_resource(Resource* buffer);
+  inline const Resource* resource();
+  inline void set_resource(const Resource* buffer);
 
   // Dispatched behavior.
   uint16_t ExternalAsciiStringGet(int index);
@@ -6416,8 +6490,8 @@ class ExternalTwoByteString: public ExternalString {
   typedef v8::String::ExternalStringResource Resource;
 
   // The underlying string resource.
-  inline Resource* resource();
-  inline void set_resource(Resource* buffer);
+  inline const Resource* resource();
+  inline void set_resource(const Resource* buffer);
 
   // Dispatched behavior.
   uint16_t ExternalTwoByteStringGet(int index);
@@ -6614,28 +6688,56 @@ class JSProxy: public JSReceiver {
   // [handler]: The handler property.
   DECL_ACCESSORS(handler, Object)
 
+  // [hash]: The hash code property (undefined if not initialized yet).
+  DECL_ACCESSORS(hash, Object)
+
   // Casting.
   static inline JSProxy* cast(Object* obj);
 
   bool HasPropertyWithHandler(String* name);
+  bool HasElementWithHandler(uint32_t index);
 
   MUST_USE_RESULT MaybeObject* GetPropertyWithHandler(
       Object* receiver,
       String* name);
+  MUST_USE_RESULT MaybeObject* GetElementWithHandler(
+      Object* receiver,
+      uint32_t index);
 
   MUST_USE_RESULT MaybeObject* SetPropertyWithHandler(
       String* name,
       Object* value,
       PropertyAttributes attributes,
       StrictModeFlag strict_mode);
+  MUST_USE_RESULT MaybeObject* SetElementWithHandler(
+      uint32_t index,
+      Object* value,
+      StrictModeFlag strict_mode);
+
+  // If the handler defines an accessor property, invoke its setter
+  // (or throw if only a getter exists) and set *found to true. Otherwise false.
+  MUST_USE_RESULT MaybeObject* SetPropertyWithHandlerIfDefiningSetter(
+      String* name,
+      Object* value,
+      PropertyAttributes attributes,
+      StrictModeFlag strict_mode,
+      bool* found);
 
   MUST_USE_RESULT MaybeObject* DeletePropertyWithHandler(
       String* name,
+      DeleteMode mode);
+  MUST_USE_RESULT MaybeObject* DeleteElementWithHandler(
+      uint32_t index,
       DeleteMode mode);
 
   MUST_USE_RESULT PropertyAttributes GetPropertyAttributeWithHandler(
       JSReceiver* receiver,
       String* name);
+  MUST_USE_RESULT PropertyAttributes GetElementAttributeWithHandler(
+      JSReceiver* receiver,
+      uint32_t index);
+
+  MUST_USE_RESULT MaybeObject* GetIdentityHash(CreationFlag flag);
 
   // Turn this into an (empty) JSObject.
   void Fix();
@@ -6665,7 +6767,8 @@ class JSProxy: public JSReceiver {
   // size as a virgin JSObject. This is essential for becoming a JSObject
   // upon freeze.
   static const int kHandlerOffset = HeapObject::kHeaderSize;
-  static const int kPaddingOffset = kHandlerOffset + kPointerSize;
+  static const int kHashOffset = kHandlerOffset + kPointerSize;
+  static const int kPaddingOffset = kHashOffset + kPointerSize;
   static const int kSize = JSObject::kHeaderSize;
   static const int kHeaderSize = kPaddingOffset;
   static const int kPaddingSize = kSize - kPaddingOffset;
@@ -6673,7 +6776,7 @@ class JSProxy: public JSReceiver {
   STATIC_CHECK(kPaddingSize >= 0);
 
   typedef FixedBodyDescriptor<kHandlerOffset,
-                              kHandlerOffset + kPointerSize,
+                              kPaddingOffset,
                               kSize> BodyDescriptor;
 
  private:
@@ -6704,7 +6807,7 @@ class JSFunctionProxy: public JSProxy {
 #endif
 
   // Layout description.
-  static const int kCallTrapOffset = kHandlerOffset + kPointerSize;
+  static const int kCallTrapOffset = JSProxy::kPaddingOffset;
   static const int kConstructTrapOffset = kCallTrapOffset + kPointerSize;
   static const int kPaddingOffset = kConstructTrapOffset + kPointerSize;
   static const int kSize = JSFunction::kSize;
@@ -6818,7 +6921,7 @@ class JSArray: public JSObject {
   MUST_USE_RESULT MaybeObject* Initialize(int capacity);
 
   // Set the content of the array to the content of storage.
-  inline void SetContent(FixedArray* storage);
+  inline MaybeObject* SetContent(FixedArray* storage);
 
   // Casting.
   static inline JSArray* cast(Object* obj);

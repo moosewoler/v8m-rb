@@ -279,15 +279,28 @@ bool RelocInfo::IsPatchedDebugBreakSlotSequence() {
 void RelocInfo::Visit(ObjectVisitor* visitor) {
   RelocInfo::Mode mode = rmode();
   if (mode == RelocInfo::EMBEDDED_OBJECT) {
-    Object** p = target_object_address();
-    Object* orig = *p;
-    visitor->VisitPointer(p, this);
-    if (*p != orig) {
-      set_target_object(*p);
-    }
-    // RelocInfo is needed when pointer must be updated/serialized, such as
-    // UpdatingVisitor in mark-compact.cc or Serializer in serialize.cc.
-    // It is ignored by visitors that do not need it.
+    // The GC system expects our address to be in the code. This is a workaround
+    // that satisfies this requirement.
+
+    Instr lui = Assembler::instr_at(pc_);
+#ifdef DEBUG
+    Instr ori = Assembler::instr_at(pc_ + Assembler::kInstrSize);
+    CHECK((Assembler::GetOpcodeField(lui) == LUI &&
+        Assembler::GetOpcodeField(ori) == ORI));
+#endif
+
+    Address target_address = Assembler::target_address_at(pc_);
+    // Dump the actual address into the code (where lui was).
+    Assembler::instr_at_put(pc_, reinterpret_cast<Instr>(target_address));
+
+    Object** opc = reinterpret_cast<Object**>(pc_);
+    visitor->VisitPointer(opc, this);
+
+    // Save the new address from GC, revert to the old lui instruction then use
+    // the standard address patching mechanism to set the new address.
+    Address new_target_address = reinterpret_cast<Address>(*opc);
+    Assembler::instr_at_put(pc_, lui);
+    Assembler::set_target_address_at(pc_, new_target_address);
   } else if (RelocInfo::IsCodeTarget(mode)) {
     visitor->VisitCodeTarget(this);
   } else if (mode == RelocInfo::GLOBAL_PROPERTY_CELL) {
