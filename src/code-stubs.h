@@ -45,15 +45,11 @@ namespace internal {
   V(Compare)                             \
   V(CompareIC)                           \
   V(MathPow)                             \
+  V(RecordWrite)                         \
+  V(StoreBufferOverflow)                 \
+  V(RegExpExec)                          \
   V(TranscendentalCache)                 \
   V(Instanceof)                          \
-  /* All stubs above this line only exist in a few versions, which are  */  \
-  /* generated ahead of time.  Therefore compiling a call to one of     */  \
-  /* them can't cause a new stub to be compiled, so compiling a call to */  \
-  /* them is GC safe.  The ones below this line exist in many variants  */  \
-  /* so code compiling a call to one can cause a GC.  This means they   */  \
-  /* can't be called from other stubs, since stub generation code is    */  \
-  /* not GC safe.                                                       */  \
   V(ConvertToDouble)                     \
   V(WriteInt32ToHeapNumber)              \
   V(StackCheck)                          \
@@ -65,7 +61,6 @@ namespace internal {
   V(ToNumber)                            \
   V(CounterOp)                           \
   V(ArgumentsAccess)                     \
-  V(RegExpExec)                          \
   V(RegExpConstructResult)               \
   V(NumberToString)                      \
   V(CEntry)                              \
@@ -142,10 +137,17 @@ class CodeStub BASE_EMBEDDED {
 
   virtual ~CodeStub() {}
 
-  // See comment above, where Instanceof is defined.
-  virtual bool CompilingCallsToThisStubIsGCSafe() {
-    return MajorKey() <= Instanceof;
+  bool CompilingCallsToThisStubIsGCSafe() {
+    bool is_pregenerated = IsPregenerated();
+#ifdef DEBUG
+    Code* code = NULL;
+    ASSERT(!is_pregenerated || FindCodeInCache(&code));
+#endif
+    return is_pregenerated;
   }
+
+  // See comment above, where Instanceof is defined.
+  virtual bool IsPregenerated() { return false; }
 
   static void GenerateStubsAheadOfTime();
   static void GenerateFPStubs();
@@ -179,6 +181,14 @@ class CodeStub BASE_EMBEDDED {
 
   // Finish the code object after it has been generated.
   virtual void FinishCode(Code* code) { }
+
+  // Returns true if TryGetCode should fail if it failed
+  // to register newly generated stub in the stub cache.
+  virtual bool MustBeInStubCache() { return false; }
+
+  // Activate newly generated stub. Is called after
+  // registering stub in the stub cache.
+  virtual void Activate(Code* code) { }
 
   // Returns information for computing the number key.
   virtual Major MajorKey() = 0;
@@ -544,17 +554,18 @@ class CompareStub: public CodeStub {
 
 class CEntryStub : public CodeStub {
  public:
-  explicit CEntryStub(int result_size)
-      : result_size_(result_size), save_doubles_(false) { }
+  explicit CEntryStub(int result_size,
+                      SaveFPRegsMode save_doubles = kDontSaveFPRegs)
+      : result_size_(result_size), save_doubles_(save_doubles) { }
 
   void Generate(MacroAssembler* masm);
-  void SaveDoubles() { save_doubles_ = true; }
 
   // The version of this stub that doesn't save doubles is generated ahead of
   // time, so it's OK to call it from other stubs that can't cope with GC during
   // their code generation.  On machines that always have gp registers (x64) we
   // can generate both variants ahead of time.
-  virtual bool CompilingCallsToThisStubIsGCSafe();
+  virtual bool IsPregenerated();
+  static void GenerateAheadOfTime();
 
  private:
   void GenerateCore(MacroAssembler* masm,
@@ -569,7 +580,7 @@ class CEntryStub : public CodeStub {
 
   // Number of pointers/values returned.
   const int result_size_;
-  bool save_doubles_;
+  SaveFPRegsMode save_doubles_;
 
   Major MajorKey() { return CEntry; }
   int MinorKey();
@@ -666,8 +677,30 @@ class CallFunctionStub: public CodeStub {
 
   void Generate(MacroAssembler* masm);
 
+  virtual void FinishCode(Code* code);
+
+  static void Clear(Heap* heap, Address address);
+
+  static Object* GetCachedValue(Address address);
+
   static int ExtractArgcFromMinorKey(int minor_key) {
     return ArgcBits::decode(minor_key);
+  }
+
+  // The object that indicates an uninitialized cache.
+  static Handle<Object> UninitializedSentinel(Isolate* isolate) {
+    return isolate->factory()->the_hole_value();
+  }
+
+  // A raw version of the uninitialized sentinel that's safe to read during
+  // garbage collection (e.g., for patching the cache).
+  static Object* RawUninitializedSentinel(Heap* heap) {
+    return heap->raw_unchecked_the_hole_value();
+  }
+
+  // The object that indicates a megamorphic state.
+  static Handle<Object> MegamorphicSentinel(Isolate* isolate) {
+    return isolate->factory()->undefined_value();
   }
 
  private:
@@ -677,8 +710,8 @@ class CallFunctionStub: public CodeStub {
   virtual void PrintName(StringStream* stream);
 
   // Minor key encoding in 32 bits with Bitfield <Type, shift, size>.
-  class FlagBits: public BitField<CallFunctionFlags, 0, 1> {};
-  class ArgcBits: public BitField<unsigned, 1, 32 - 1> {};
+  class FlagBits: public BitField<CallFunctionFlags, 0, 2> {};
+  class ArgcBits: public BitField<unsigned, 2, 32 - 2> {};
 
   Major MajorKey() { return CallFunction; }
   int MinorKey() {
@@ -688,6 +721,10 @@ class CallFunctionStub: public CodeStub {
 
   bool ReceiverMightBeImplicit() {
     return (flags_ & RECEIVER_MIGHT_BE_IMPLICIT) != 0;
+  }
+
+  bool RecordCallTarget() {
+    return (flags_ & RECORD_CALL_TARGET) != 0;
   }
 };
 

@@ -432,7 +432,13 @@ void StubCompiler::GenerateStoreField(MacroAssembler* masm,
 
     // Update the write barrier for the array address.
     // Pass the now unused name_reg as a scratch register.
-    __ RecordWrite(receiver_reg, Operand(offset), name_reg, scratch);
+    __ mov(name_reg, a0);
+    __ RecordWriteField(receiver_reg,
+                        offset,
+                        name_reg,
+                        scratch,
+                        kRAHasNotBeenSaved,
+                        kDontSaveFPRegs);
   } else {
     // Write to the properties array.
     int offset = index * kPointerSize + FixedArray::kHeaderSize;
@@ -445,7 +451,13 @@ void StubCompiler::GenerateStoreField(MacroAssembler* masm,
 
     // Update the write barrier for the array address.
     // Ok to clobber receiver_reg and name_reg, since we return.
-    __ RecordWrite(scratch, Operand(offset), name_reg, receiver_reg);
+    __ mov(name_reg, a0);
+    __ RecordWriteField(scratch,
+                        offset,
+                        name_reg,
+                        receiver_reg,
+                        kRAHasNotBeenSaved,
+                        kDontSaveFPRegs);
   }
 
   // Return the value (register v0).
@@ -1589,7 +1601,7 @@ MaybeObject* CallStubCompiler::CompileArrayPushCall(Object* object,
                 DONT_DO_SMI_CHECK);
 
     if (argc == 1) {  // Otherwise fall through to call the builtin.
-      Label exit, with_write_barrier, attempt_to_grow_elements;
+      Label attempt_to_grow_elements;
 
       // Get the array's length into v0 and calculate new length.
       __ lw(v0, FieldMemOperand(receiver, JSArray::kLengthOffset));
@@ -1603,11 +1615,15 @@ MaybeObject* CallStubCompiler::CompileArrayPushCall(Object* object,
       // Check if we could survive without allocation.
       __ Branch(&attempt_to_grow_elements, gt, v0, Operand(t0));
 
+      // Check if value is a smi.
+      Label with_write_barrier;
+      __ lw(t0, MemOperand(sp, (argc - 1) * kPointerSize));
+      __ JumpIfNotSmi(t0, &with_write_barrier);
+
       // Save new length.
       __ sw(v0, FieldMemOperand(receiver, JSArray::kLengthOffset));
 
       // Push the element.
-      __ lw(t0, MemOperand(sp, (argc - 1) * kPointerSize));
       // We may need a register containing the address end_elements below,
       // so write back the value in end_elements.
       __ sll(end_elements, v0, kPointerSizeLog2 - kSmiTagSize);
@@ -1618,14 +1634,34 @@ MaybeObject* CallStubCompiler::CompileArrayPushCall(Object* object,
       __ sw(t0, MemOperand(end_elements));
 
       // Check for a smi.
-      __ JumpIfNotSmi(t0, &with_write_barrier);
-      __ bind(&exit);
       __ Drop(argc + 1);
       __ Ret();
 
       __ bind(&with_write_barrier);
-      __ InNewSpace(elements, t0, eq, &exit);
-      __ RecordWriteHelper(elements, end_elements, t0);
+
+      if (FLAG_smi_only_arrays) {
+        __ lw(t2, FieldMemOperand(receiver, HeapObject::kMapOffset));
+        __ CheckFastSmiOnlyElements(t2, t2, &call_builtin);
+      }
+
+      // Save new length.
+      __ sw(v0, FieldMemOperand(receiver, JSArray::kLengthOffset));
+
+      // Push the element.
+      // We may need a register containing the address end_elements below,
+      // so write back the value in end_elements.
+      __ sll(end_elements, v0, kPointerSizeLog2 - kSmiTagSize);
+      __ Addu(end_elements, elements, end_elements);
+      __ Addu(end_elements, end_elements, kEndElementsOffset);
+      __ sw(t0, MemOperand(end_elements));
+
+      __ RecordWrite(elements,
+                     end_elements,
+                     t0,
+                     kRAHasNotBeenSaved,
+                     kDontSaveFPRegs,
+                     EMIT_REMEMBERED_SET,
+                     OMIT_SMI_CHECK);
       __ Drop(argc + 1);
       __ Ret();
 
@@ -1635,6 +1671,17 @@ MaybeObject* CallStubCompiler::CompileArrayPushCall(Object* object,
 
       if (!FLAG_inline_new) {
         __ Branch(&call_builtin);
+      }
+
+      __ lw(a2, MemOperand(sp, (argc - 1) * kPointerSize));
+      if (FLAG_smi_only_arrays) {
+        // Growing elements that are SMI-only requires special handling in case
+        // the new element is non-Smi. For now, delegate to the builtin.
+        Label no_fast_elements_check;
+        __ JumpIfSmi(a2, &no_fast_elements_check);
+        __ lw(t3, FieldMemOperand(receiver, HeapObject::kMapOffset));
+        __ CheckFastObjectElements(t3, t3, &call_builtin);
+        __ bind(&no_fast_elements_check);
       }
 
       ExternalReference new_space_allocation_top =
@@ -1662,8 +1709,7 @@ MaybeObject* CallStubCompiler::CompileArrayPushCall(Object* object,
       // Update new_space_allocation_top.
       __ sw(t2, MemOperand(t3));
       // Push the argument.
-      __ lw(t2, MemOperand(sp, (argc - 1) * kPointerSize));
-      __ sw(t2, MemOperand(end_elements));
+      __ sw(a2, MemOperand(end_elements));
       // Fill the rest with holes.
       __ LoadRoot(t2, Heap::kTheHoleValueRootIndex);
       for (int i = 1; i < kAllocationDelta; i++) {
@@ -2732,6 +2778,16 @@ MaybeObject* StoreStubCompiler::CompileStoreGlobal(GlobalObject* object,
   // Store the value in the cell.
   __ sw(a0, FieldMemOperand(t0, JSGlobalPropertyCell::kValueOffset));
   __ mov(v0, a0);  // Stored value must be returned in v0.
+
+  // This trashes a0 but the value is returned in v0 anyway.
+  __ RecordWriteField(t0,
+                      JSGlobalPropertyCell::kValueOffset,
+                      a0,
+                      a2,
+                      kRAHasNotBeenSaved,
+                      kDontSaveFPRegs,
+                      OMIT_REMEMBERED_SET);
+
   Counters* counters = masm()->isolate()->counters();
   __ IncrementCounter(counters->named_store_global_inline(), 1, a1, a3);
   __ Ret();
@@ -3471,6 +3527,7 @@ static bool IsElementTypeSigned(ElementsKind elements_kind) {
 
     case EXTERNAL_FLOAT_ELEMENTS:
     case EXTERNAL_DOUBLE_ELEMENTS:
+    case FAST_SMI_ONLY_ELEMENTS:
     case FAST_ELEMENTS:
     case FAST_DOUBLE_ELEMENTS:
     case DICTIONARY_ELEMENTS:
@@ -3567,6 +3624,7 @@ void KeyedLoadStubCompiler::GenerateLoadExternalArray(
       }
       break;
     case FAST_ELEMENTS:
+    case FAST_SMI_ONLY_ELEMENTS:
     case FAST_DOUBLE_ELEMENTS:
     case DICTIONARY_ELEMENTS:
     case NON_STRICT_ARGUMENTS_ELEMENTS:
@@ -3927,6 +3985,7 @@ void KeyedStoreStubCompiler::GenerateStoreExternalArray(
       }
       break;
     case FAST_ELEMENTS:
+    case FAST_SMI_ONLY_ELEMENTS:
     case FAST_DOUBLE_ELEMENTS:
     case DICTIONARY_ELEMENTS:
     case NON_STRICT_ARGUMENTS_ELEMENTS:
@@ -3991,6 +4050,7 @@ void KeyedStoreStubCompiler::GenerateStoreExternalArray(
           case EXTERNAL_FLOAT_ELEMENTS:
           case EXTERNAL_DOUBLE_ELEMENTS:
           case FAST_ELEMENTS:
+          case FAST_SMI_ONLY_ELEMENTS:
           case FAST_DOUBLE_ELEMENTS:
           case DICTIONARY_ELEMENTS:
           case NON_STRICT_ARGUMENTS_ELEMENTS:
@@ -4162,6 +4222,7 @@ void KeyedStoreStubCompiler::GenerateStoreExternalArray(
           case EXTERNAL_FLOAT_ELEMENTS:
           case EXTERNAL_DOUBLE_ELEMENTS:
           case FAST_ELEMENTS:
+          case FAST_SMI_ONLY_ELEMENTS:
           case FAST_DOUBLE_ELEMENTS:
           case DICTIONARY_ELEMENTS:
           case NON_STRICT_ARGUMENTS_ELEMENTS:
@@ -4311,8 +4372,10 @@ void KeyedLoadStubCompiler::GenerateLoadFastDoubleElement(
 }
 
 
-void KeyedStoreStubCompiler::GenerateStoreFastElement(MacroAssembler* masm,
-                                                      bool is_js_array) {
+void KeyedStoreStubCompiler::GenerateStoreFastElement(
+    MacroAssembler* masm,
+    bool is_js_array,
+    ElementsKind elements_kind) {
   // ----------- S t a t e -------------
   //  -- a0    : value
   //  -- a1    : key
@@ -4355,14 +4418,32 @@ void KeyedStoreStubCompiler::GenerateStoreFastElement(MacroAssembler* masm,
   // Compare smis.
   __ Branch(&miss_force_generic, hs, key_reg, Operand(scratch));
 
-  __ Addu(scratch,
-          elements_reg, Operand(FixedArray::kHeaderSize - kHeapObjectTag));
-  STATIC_ASSERT(kSmiTag == 0 && kSmiTagSize < kPointerSizeLog2);
-  __ sll(scratch2, key_reg, kPointerSizeLog2 - kSmiTagSize);
-  __ Addu(scratch3, scratch2, scratch);
-  __ sw(value_reg, MemOperand(scratch3));
-  __ RecordWrite(scratch, Operand(scratch2), receiver_reg , elements_reg);
-
+  if (elements_kind == FAST_SMI_ONLY_ELEMENTS) {
+    __ JumpIfNotSmi(value_reg, &miss_force_generic);
+    __ Addu(scratch,
+            elements_reg,
+            Operand(FixedArray::kHeaderSize - kHeapObjectTag));
+    STATIC_ASSERT(kSmiTag == 0 && kSmiTagSize < kPointerSizeLog2);
+    __ sll(scratch2, key_reg, kPointerSizeLog2 - kSmiTagSize);
+    __ Addu(scratch, scratch, scratch2);
+    __ sw(value_reg, MemOperand(scratch));
+  } else {
+    ASSERT(elements_kind == FAST_ELEMENTS);
+    __ Addu(scratch,
+            elements_reg,
+            Operand(FixedArray::kHeaderSize - kHeapObjectTag));
+    STATIC_ASSERT(kSmiTag == 0 && kSmiTagSize < kPointerSizeLog2);
+    __ sll(scratch2, key_reg, kPointerSizeLog2 - kSmiTagSize);
+    __ Addu(scratch, scratch, scratch2);
+    __ sw(value_reg, MemOperand(scratch));
+    __ mov(receiver_reg, value_reg);
+  ASSERT(elements_kind == FAST_ELEMENTS);
+    __ RecordWrite(elements_reg,  // Object.
+                   scratch,       // Address.
+                   receiver_reg,  // Value.
+                   kRAHasNotBeenSaved,
+                   kDontSaveFPRegs);
+  }
   // value_reg (a0) is preserved.
   // Done.
   __ Ret();

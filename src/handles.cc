@@ -421,17 +421,16 @@ Handle<Object> PreventExtensions(Handle<JSObject> object) {
 }
 
 
-Handle<Object> GetHiddenProperties(Handle<JSObject> obj,
-                                   JSObject::HiddenPropertiesFlag flag) {
+Handle<Object> GetHiddenProperties(Handle<JSObject> obj, CreationFlag flag) {
   CALL_HEAP_FUNCTION(obj->GetIsolate(),
                      obj->GetHiddenProperties(flag),
                      Object);
 }
 
 
-int GetIdentityHash(Handle<JSObject> obj) {
+int GetIdentityHash(Handle<JSReceiver> obj) {
   CALL_AND_RETRY(obj->GetIsolate(),
-                 obj->GetIdentityHash(JSObject::ALLOW_CREATION),
+                 obj->GetIdentityHash(ALLOW_CREATION),
                  return Smi::cast(__object__)->value(),
                  return 0);
 }
@@ -886,7 +885,7 @@ Handle<FixedArray> GetEnumPropertyKeys(Handle<JSObject> object,
 
 
 Handle<ObjectHashTable> PutIntoObjectHashTable(Handle<ObjectHashTable> table,
-                                               Handle<JSObject> key,
+                                               Handle<JSReceiver> key,
                                                Handle<Object> value) {
   CALL_HEAP_FUNCTION(table->GetIsolate(),
                      table->Put(*key, *value),
@@ -941,6 +940,22 @@ bool CompileOptimized(Handle<JSFunction> function,
   CompilationInfo info(function);
   info.SetOptimizing(osr_ast_id);
   return CompileLazyHelper(&info, flag);
+}
+
+
+void LockString(Handle<String> string) {
+  CALL_HEAP_FUNCTION_VOID(string->GetHeap()->isolate(),
+                          string->GetHeap()->LockString(*string));
+}
+
+
+StringLock::StringLock(Handle<String> string) : string_(string) {
+  LockString(string);
+}
+
+
+StringLock::~StringLock() {
+  string_->GetHeap()->UnlockString(*string_);
 }
 
 } }  // namespace v8::internal

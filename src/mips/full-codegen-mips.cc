@@ -47,6 +47,7 @@
 #include "stub-cache.h"
 
 #include "mips/code-stubs-mips.h"
+#include "mips/macro-assembler-mips.h"
 
 namespace v8 {
 namespace internal {
@@ -214,14 +215,12 @@ void FullCodeGenerator::Generate(CompilationInfo* info) {
         // Load parameter from stack.
         __ lw(a0, MemOperand(fp, parameter_offset));
         // Store it in the context.
-        __ li(a1, Operand(Context::SlotOffset(var->index())));
-        __ addu(a2, cp, a1);
-        __ sw(a0, MemOperand(a2, 0));
-        // Update the write barrier. This clobbers all involved
-        // registers, so we have to use two more registers to avoid
-        // clobbering cp.
-        __ mov(a2, cp);
-        __ RecordWrite(a2, a1, a3);
+        MemOperand target = ContextOperand(cp, var->index());
+        __ sw(a0, target);
+
+        // Update the write barrier.
+        __ RecordWriteContextSlot(
+            cp, target.offset(), a0, a3, kRAHasBeenSaved, kDontSaveFPRegs);
       }
     }
   }
@@ -685,10 +684,12 @@ void FullCodeGenerator::SetVar(Variable* var,
   __ sw(src, location);
   // Emit the write barrier code if the location is in the heap.
   if (var->IsContextSlot()) {
-    __ RecordWrite(scratch0,
-                   Operand(Context::SlotOffset(var->index())),
-                   scratch1,
-                   src);
+    __ RecordWriteContextSlot(scratch0,
+                              location.offset(),
+                              src,
+                              scratch1,
+                              kRAHasBeenSaved,
+                              kDontSaveFPRegs);
   }
 }
 
@@ -765,8 +766,14 @@ void FullCodeGenerator::EmitDeclaration(VariableProxy* proxy,
         __ sw(result_register(), ContextOperand(cp, variable->index()));
         int offset = Context::SlotOffset(variable->index());
         // We know that we have written a function, which is not a smi.
-        __ mov(a1, cp);
-        __ RecordWrite(a1, Operand(offset), a2, result_register());
+        __ RecordWriteContextSlot(cp,
+                                  offset,
+                                  result_register(),
+                                  a2,
+                                  kRAHasBeenSaved,
+                                  kDontSaveFPRegs,
+                                  EMIT_REMEMBERED_SET,
+                                  OMIT_SMI_CHECK);
         PrepareForBailoutForId(proxy->id(), NO_REGISTERS);
       } else if (mode == Variable::CONST || mode == Variable::LET) {
           Comment cmnt(masm_, "[ Declaration");
@@ -1506,14 +1513,25 @@ void FullCodeGenerator::VisitArrayLiteral(ArrayLiteral* expr) {
     VisitForAccumulatorValue(subexpr);
 
     // Store the subexpression value in the array's elements.
-    __ lw(a1, MemOperand(sp));  // Copy of array literal.
-    __ lw(a1, FieldMemOperand(a1, JSObject::kElementsOffset));
+    __ lw(t6, MemOperand(sp));  // Copy of array literal.
+    __ lw(a1, FieldMemOperand(t6, JSObject::kElementsOffset));
     int offset = FixedArray::kHeaderSize + (i * kPointerSize);
     __ sw(result_register(), FieldMemOperand(a1, offset));
 
+    Label no_map_change;
+    __ JumpIfSmi(result_register(), &no_map_change);
     // Update the write barrier for the array store with v0 as the scratch
     // register.
-    __ RecordWrite(a1, Operand(offset), a2, result_register());
+    __ RecordWriteField(
+        a1, offset, result_register(), a2, kRAHasBeenSaved, kDontSaveFPRegs,
+        EMIT_REMEMBERED_SET, OMIT_SMI_CHECK);
+    if (FLAG_smi_only_arrays) {
+      __ lw(a3, FieldMemOperand(a1, HeapObject::kMapOffset));
+      __ CheckFastSmiOnlyElements(a3, a2, &no_map_change);
+      __ push(t6);  // Copy of array literal.
+      __ CallRuntime(Runtime::kNonSmiElementStored, 1);
+    }
+    __ bind(&no_map_change);
 
     PrepareForBailoutForId(expr->GetIdForElement(i), NO_REGISTERS);
   }
@@ -1890,7 +1908,8 @@ void FullCodeGenerator::EmitVariableAssignment(Variable* var,
         // RecordWrite may destroy all its register arguments.
         __ mov(a3, result_register());
         int offset = Context::SlotOffset(var->index());
-        __ RecordWrite(a1, Operand(offset), a2, a3);
+        __ RecordWriteContextSlot(
+            a1, offset, a3, a2, kRAHasBeenSaved, kDontSaveFPRegs);
       }
     }
 
@@ -1908,7 +1927,9 @@ void FullCodeGenerator::EmitVariableAssignment(Variable* var,
       __ sw(v0, location);
       if (var->IsContextSlot()) {
         __ mov(a3, v0);
-        __ RecordWrite(a1, Operand(Context::SlotOffset(var->index())), a2, a3);
+        int offset = Context::SlotOffset(var->index());
+        __ RecordWriteContextSlot(
+            a1, offset, a3, a2, kRAHasBeenSaved, kDontSaveFPRegs);
       }
     } else {
       ASSERT(var->IsLookupSlot());
@@ -2686,18 +2707,23 @@ void FullCodeGenerator::EmitClassOf(ZoneList<Expression*>* args) {
 
   // Check that the object is a JS object but take special care of JS
   // functions to make sure they have 'Function' as their class.
+  // Assume that there are only two callable types, and one of them is at
+  // either end of the type range for JS object types. Saves extra comparisons.
+  STATIC_ASSERT(NUM_OF_CALLABLE_SPEC_OBJECT_TYPES == 2);
   __ GetObjectType(v0, v0, a1);  // Map is now in v0.
   __ Branch(&null, lt, a1, Operand(FIRST_SPEC_OBJECT_TYPE));
 
-  // As long as LAST_CALLABLE_SPEC_OBJECT_TYPE is the last instance type, and
-  // FIRST_CALLABLE_SPEC_OBJECT_TYPE comes right after
-  // LAST_NONCALLABLE_SPEC_OBJECT_TYPE, we can avoid checking for the latter.
-  STATIC_ASSERT(LAST_TYPE == LAST_CALLABLE_SPEC_OBJECT_TYPE);
-  STATIC_ASSERT(FIRST_CALLABLE_SPEC_OBJECT_TYPE ==
-                LAST_NONCALLABLE_SPEC_OBJECT_TYPE + 1);
-  __ Branch(&function, ge, a1, Operand(FIRST_CALLABLE_SPEC_OBJECT_TYPE));
+  STATIC_ASSERT(FIRST_NONCALLABLE_SPEC_OBJECT_TYPE ==
+                FIRST_SPEC_OBJECT_TYPE + 1);
+  __ Branch(&function, eq, a1, Operand(FIRST_SPEC_OBJECT_TYPE));
 
-  // Check if the constructor in the map is a function.
+  STATIC_ASSERT(LAST_NONCALLABLE_SPEC_OBJECT_TYPE ==
+                LAST_SPEC_OBJECT_TYPE - 1);
+  __ Branch(&function, eq, a1, Operand(LAST_SPEC_OBJECT_TYPE));
+  // Assume that there is no larger type.
+  STATIC_ASSERT(LAST_NONCALLABLE_SPEC_OBJECT_TYPE == LAST_TYPE - 1);
+
+  // Check if the constructor in the map is a JS function.
   __ lw(v0, FieldMemOperand(v0, Map::kConstructorOffset));
   __ GetObjectType(v0, a1, a1);
   __ Branch(&non_function_constructor, ne, a1, Operand(JS_FUNCTION_TYPE));
@@ -2876,7 +2902,9 @@ void FullCodeGenerator::EmitSetValueOf(ZoneList<Expression*>* args) {
   __ sw(v0, FieldMemOperand(a1, JSValue::kValueOffset));
   // Update the write barrier.  Save the value as it will be
   // overwritten by the write barrier code and is needed afterward.
-  __ RecordWrite(a1, Operand(JSValue::kValueOffset - kHeapObjectTag), a2, a3);
+  __ mov(a2, v0);
+  __ RecordWriteField(
+      a1, JSValue::kValueOffset, a2, a3, kRAHasBeenSaved, kDontSaveFPRegs);
 
   __ bind(&done);
   context()->Plug(v0);
@@ -3169,16 +3197,31 @@ void FullCodeGenerator::EmitSwapElements(ZoneList<Expression*>* args) {
   __ sw(scratch1, MemOperand(index2, 0));
   __ sw(scratch2, MemOperand(index1, 0));
 
-  Label new_space;
-  __ InNewSpace(elements, scratch1, eq, &new_space);
+  Label no_remembered_set;
+  __ CheckPageFlag(elements,
+                   scratch1,
+                   1 << MemoryChunk::SCAN_ON_SCAVENGE,
+                   ne,
+                   &no_remembered_set);
   // Possible optimization: do a check that both values are Smis
   // (or them and test against Smi mask).
 
-  __ mov(scratch1, elements);
-  __ RecordWriteHelper(elements, index1, scratch2);
-  __ RecordWriteHelper(scratch1, index2, scratch2);  // scratch1 holds elements.
+  // We are swapping two objects in an array and the incremental marker never
+  // pauses in the middle of scanning a single object.  Therefore the
+  // incremental marker is not disturbed, so we don't need to call the
+  // RecordWrite stub that notifies the incremental marker.
+  __ RememberedSetHelper(elements,
+                         index1,
+                         scratch2,
+                         kDontSaveFPRegs,
+                         MacroAssembler::kFallThroughAtEnd);
+  __ RememberedSetHelper(elements,
+                         index2,
+                         scratch2,
+                         kDontSaveFPRegs,
+                         MacroAssembler::kFallThroughAtEnd);
 
-  __ bind(&new_space);
+  __ bind(&no_remembered_set);
   // We are done. Drop elements from the stack, and return undefined.
   __ Drop(3);
   __ LoadRoot(v0, Heap::kUndefinedValueRootIndex);
@@ -3936,10 +3979,14 @@ void FullCodeGenerator::VisitForTypeofValue(Expression* expr) {
 }
 
 void FullCodeGenerator::EmitLiteralCompareTypeof(Expression* expr,
-                                                 Handle<String> check,
-                                                 Label* if_true,
-                                                 Label* if_false,
-                                                 Label* fall_through) {
+                                                 Handle<String> check) {
+  Label materialize_true, materialize_false;
+  Label* if_true = NULL;
+  Label* if_false = NULL;
+  Label* fall_through = NULL;
+  context()->PrepareTest(&materialize_true, &materialize_false,
+                         &if_true, &if_false, &fall_through);
+
   { AccumulatorValueContext context(this);
     VisitForTypeofValue(expr);
   }
@@ -3979,10 +4026,11 @@ void FullCodeGenerator::EmitLiteralCompareTypeof(Expression* expr,
     Split(ne, a1, Operand(zero_reg), if_true, if_false, fall_through);
   } else if (check->Equals(isolate()->heap()->function_symbol())) {
     __ JumpIfSmi(v0, if_false);
-    __ GetObjectType(v0, a1, v0);  // Leave map in a1.
-    Split(ge, v0, Operand(FIRST_CALLABLE_SPEC_OBJECT_TYPE),
-        if_true, if_false, fall_through);
-
+    STATIC_ASSERT(NUM_OF_CALLABLE_SPEC_OBJECT_TYPES == 2);
+    __ GetObjectType(v0, v0, a1);
+    __ Branch(if_true, eq, a1, Operand(JS_FUNCTION_TYPE));
+    Split(eq, a1, Operand(JS_FUNCTION_PROXY_TYPE),
+          if_true, if_false, fall_through);
   } else if (check->Equals(isolate()->heap()->object_symbol())) {
     __ JumpIfSmi(v0, if_false);
     if (!FLAG_harmony_typeof) {
@@ -4001,18 +4049,7 @@ void FullCodeGenerator::EmitLiteralCompareTypeof(Expression* expr,
   } else {
     if (if_false != fall_through) __ jmp(if_false);
   }
-}
-
-
-void FullCodeGenerator::EmitLiteralCompareUndefined(Expression* expr,
-                                                    Label* if_true,
-                                                    Label* if_false,
-                                                    Label* fall_through) {
-  VisitForAccumulatorValue(expr);
-  PrepareForBailoutBeforeSplit(TOS_REG, true, if_true, if_false);
-
-  __ LoadRoot(at, Heap::kUndefinedValueRootIndex);
-  Split(eq, v0, Operand(at), if_true, if_false, fall_through);
+  context()->Plug(if_true, if_false);
 }
 
 
@@ -4020,22 +4057,18 @@ void FullCodeGenerator::VisitCompareOperation(CompareOperation* expr) {
   Comment cmnt(masm_, "[ CompareOperation");
   SetSourcePosition(expr->position());
 
+  // First we try a fast inlined version of the compare when one of
+  // the operands is a literal.
+  if (TryLiteralCompare(expr)) return;
+
   // Always perform the comparison for its control flow.  Pack the result
   // into the expression's context after the comparison is performed.
-
   Label materialize_true, materialize_false;
   Label* if_true = NULL;
   Label* if_false = NULL;
   Label* fall_through = NULL;
   context()->PrepareTest(&materialize_true, &materialize_false,
                          &if_true, &if_false, &fall_through);
-
-  // First we try a fast inlined version of the compare when one of
-  // the operands is a literal.
-  if (TryLiteralCompare(expr, if_true, if_false, fall_through)) {
-    context()->Plug(if_true, if_false);
-    return;
-  }
 
   Token::Value op = expr->op();
   VisitForStackValue(expr->left());
@@ -4061,11 +4094,8 @@ void FullCodeGenerator::VisitCompareOperation(CompareOperation* expr) {
     default: {
       VisitForAccumulatorValue(expr->right());
       Condition cc = eq;
-      bool strict = false;
       switch (op) {
         case Token::EQ_STRICT:
-          strict = true;
-          // Fall through.
         case Token::EQ:
           cc = eq;
           __ mov(a0, result_register());
@@ -4124,20 +4154,31 @@ void FullCodeGenerator::VisitCompareOperation(CompareOperation* expr) {
 }
 
 
-void FullCodeGenerator::EmitLiteralCompareNull(Expression* expr,
-                                               bool is_strict,
-                                               Label* if_true,
-                                               Label* if_false,
-                                               Label* fall_through) {
-  VisitForAccumulatorValue(expr);
+void FullCodeGenerator::EmitLiteralCompareNil(CompareOperation* expr,
+                                              Expression* sub_expr,
+                                              NilValue nil) {
+  Label materialize_true, materialize_false;
+  Label* if_true = NULL;
+  Label* if_false = NULL;
+  Label* fall_through = NULL;
+  context()->PrepareTest(&materialize_true, &materialize_false,
+                         &if_true, &if_false, &fall_through);
+
+  VisitForAccumulatorValue(sub_expr);
   PrepareForBailoutBeforeSplit(TOS_REG, true, if_true, if_false);
+  Heap::RootListIndex nil_value = nil == kNullValue ?
+      Heap::kNullValueRootIndex :
+      Heap::kUndefinedValueRootIndex;
   __ mov(a0, result_register());
-  __ LoadRoot(a1, Heap::kNullValueRootIndex);
-  if (is_strict) {
+  __ LoadRoot(a1, nil_value);
+  if (expr->op() == Token::EQ_STRICT) {
     Split(eq, a0, Operand(a1), if_true, if_false, fall_through);
   } else {
+    Heap::RootListIndex other_nil_value = nil == kNullValue ?
+        Heap::kUndefinedValueRootIndex :
+        Heap::kNullValueRootIndex;
     __ Branch(if_true, eq, a0, Operand(a1));
-    __ LoadRoot(a1, Heap::kUndefinedValueRootIndex);
+    __ LoadRoot(a1, other_nil_value);
     __ Branch(if_true, eq, a0, Operand(a1));
     __ And(at, a0, Operand(kSmiTagMask));
     __ Branch(if_false, eq, at, Operand(zero_reg));
@@ -4147,6 +4188,7 @@ void FullCodeGenerator::EmitLiteralCompareNull(Expression* expr,
     __ And(a1, a1, Operand(1 << Map::kIsUndetectable));
     Split(ne, a1, Operand(zero_reg), if_true, if_false, fall_through);
   }
+  context()->Plug(if_true, if_false);
 }
 
 

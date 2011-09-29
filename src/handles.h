@@ -163,9 +163,11 @@ class HandleScope {
 
 // ----------------------------------------------------------------------------
 // Handle operations.
-// They might invoke garbage collection. The result is an handle to
-// an object of expected type, or the handle is an error if running out
-// of space or encountering an internal error.
+// They might invoke garbage collection. The result is an handle to an
+// object of expected type, or the handle is a null handle if encountering
+// an internal error. Will not return a null handle due to out-of-memory
+// unless otherwise stated, but will instead try to do GC and die fatally
+// if that doesn't help.
 
 void NormalizeProperties(Handle<JSObject> object,
                          PropertyNormalizationMode mode,
@@ -183,7 +185,7 @@ MUST_USE_RESULT Handle<NumberDictionary> NumberDictionarySet(
 void FlattenString(Handle<String> str);
 
 // Flattens a string and returns the underlying external or sequential
-// string.
+// string. Never returns a null handle.
 Handle<String> FlattenGetString(Handle<String> str);
 
 Handle<Object> SetProperty(Handle<JSReceiver> object,
@@ -267,10 +269,9 @@ Handle<Object> SetPrototype(Handle<JSObject> obj, Handle<Object> value);
 // properties and HiddenPropertiesFlag::ALLOW_CREATION is passed, then a new
 // hidden property object will be allocated. Otherwise Heap::undefined_value
 // is returned.
-Handle<Object> GetHiddenProperties(Handle<JSObject> obj,
-                                   JSObject::HiddenPropertiesFlag flag);
+Handle<Object> GetHiddenProperties(Handle<JSObject> obj, CreationFlag flag);
 
-int GetIdentityHash(Handle<JSObject> obj);
+int GetIdentityHash(Handle<JSReceiver> obj);
 
 Handle<Object> DeleteElement(Handle<JSObject> obj, uint32_t index);
 Handle<Object> DeleteProperty(Handle<JSObject> obj, Handle<String> prop);
@@ -348,7 +349,7 @@ Handle<Object> SetPrototype(Handle<JSFunction> function,
 Handle<Object> PreventExtensions(Handle<JSObject> object);
 
 Handle<ObjectHashTable> PutIntoObjectHashTable(Handle<ObjectHashTable> table,
-                                               Handle<JSObject> key,
+                                               Handle<JSReceiver> key,
                                                Handle<Object> value);
 
 // Does lazy compilation of the given function. Returns true on success and
@@ -378,6 +379,22 @@ class NoHandleAllocation BASE_EMBEDDED {
  private:
   int level_;
 #endif
+};
+
+
+// Prevents a (non-cons, non-slice) string from having its representation
+// changed. This is just a Handle based wrapper around Heap::LockString.
+// Use Heap::UnlockString to unlock (that one can't cause allocation, so
+// it doesn't need a Handle wrapper).
+void LockString(Handle<String> string);
+
+// Scoped lock on a string.
+class StringLock {
+ public:
+  explicit StringLock(Handle<String> string);
+  ~StringLock();
+ private:
+  Handle<String> string_;
 };
 
 } }  // namespace v8::internal

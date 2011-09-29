@@ -208,7 +208,8 @@ static void GenerateDictionaryStore(MacroAssembler* masm,
 
   // Update the write barrier. Make sure not to clobber the value.
   __ mov(scratch1, value);
-  __ RecordWrite(elements, scratch2, scratch1);
+  __ RecordWrite(
+      elements, scratch2, scratch1, kLRHasNotBeenSaved, kDontSaveFPRegs);
 }
 
 
@@ -910,7 +911,8 @@ void KeyedStoreIC::GenerateNonStrictArguments(MacroAssembler* masm) {
       GenerateMappedArgumentsLookup(masm, r2, r1, r3, r4, r5, &notin, &slow);
   __ str(r0, mapped_location);
   __ add(r6, r3, r5);
-  __ RecordWrite(r3, r6, r9);
+  __ mov(r9, r0);
+  __ RecordWrite(r3, r6, r9, kLRHasNotBeenSaved, kDontSaveFPRegs);
   __ Ret();
   __ bind(&notin);
   // The unmapped lookup expects that the parameter map is in r3.
@@ -918,7 +920,8 @@ void KeyedStoreIC::GenerateNonStrictArguments(MacroAssembler* masm) {
       GenerateUnmappedArgumentsLookup(masm, r1, r3, r4, &slow);
   __ str(r0, unmapped_location);
   __ add(r6, r3, r4);
-  __ RecordWrite(r3, r6, r9);
+  __ mov(r9, r0);
+  __ RecordWrite(r3, r6, r9, kLRHasNotBeenSaved, kDontSaveFPRegs);
   __ Ret();
   __ bind(&slow);
   GenerateMiss(masm, false);
@@ -1355,17 +1358,36 @@ void KeyedStoreIC::GenerateGeneric(MacroAssembler* masm,
   // Fall through to fast case.
 
   __ bind(&fast);
-  // Fast case, store the value to the elements backing store.
-  __ add(r5, elements, Operand(FixedArray::kHeaderSize - kHeapObjectTag));
-  __ add(r5, r5, Operand(key, LSL, kPointerSizeLog2 - kSmiTagSize));
-  __ str(value, MemOperand(r5));
-  // Skip write barrier if the written value is a smi.
-  __ tst(value, Operand(kSmiTagMask));
-  __ Ret(eq);
-  // Update write barrier for the elements array address.
-  __ sub(r4, r5, Operand(elements));
-  __ RecordWrite(elements, Operand(r4), r5, r6);
+  Register scratch_value = r4;
+  Register address = r5;
 
+  Label non_smi_value;
+  __ JumpIfNotSmi(value, &non_smi_value);
+  // It's irrelevant whether array is smi-only or not when writing a smi.
+  __ add(address, elements, Operand(FixedArray::kHeaderSize - kHeapObjectTag));
+  __ add(address, address, Operand(key, LSL, kPointerSizeLog2 - kSmiTagSize));
+  __ str(value, MemOperand(address));
+  __ Ret();
+
+  __ bind(&non_smi_value);
+  if (FLAG_smi_only_arrays) {
+    // Escape to slow case when writing non-smi into smi-only array.
+    __ ldr(scratch_value, FieldMemOperand(receiver, HeapObject::kMapOffset));
+    __ CheckFastObjectElements(scratch_value, scratch_value, &slow);
+  }
+  // Fast elements array, store the value to the elements backing store.
+  __ add(address, elements, Operand(FixedArray::kHeaderSize - kHeapObjectTag));
+  __ add(address, address, Operand(key, LSL, kPointerSizeLog2 - kSmiTagSize));
+  __ str(value, MemOperand(address));
+  // Update write barrier for the elements array address.
+  __ mov(scratch_value, value);  // Preserve the value which is returned.
+  __ RecordWrite(elements,
+                 address,
+                 scratch_value,
+                 kLRHasNotBeenSaved,
+                 kDontSaveFPRegs,
+                 EMIT_REMEMBERED_SET,
+                 OMIT_SMI_CHECK);
   __ Ret();
 }
 

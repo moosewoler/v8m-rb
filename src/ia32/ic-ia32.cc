@@ -212,7 +212,7 @@ static void GenerateDictionaryStore(MacroAssembler* masm,
 
   // Update write barrier. Make sure not to clobber the value.
   __ mov(r1, value);
-  __ RecordWrite(elements, r0, r1);
+  __ RecordWrite(elements, r0, r1, kDontSaveFPRegs);
 }
 
 
@@ -710,7 +710,7 @@ void KeyedStoreIC::GenerateNonStrictArguments(MacroAssembler* masm) {
   __ mov(mapped_location, eax);
   __ lea(ecx, mapped_location);
   __ mov(edx, eax);
-  __ RecordWrite(ebx, ecx, edx);
+  __ RecordWrite(ebx, ecx, edx, kDontSaveFPRegs);
   __ Ret();
   __ bind(&notin);
   // The unmapped lookup expects that the parameter map is in ebx.
@@ -719,7 +719,7 @@ void KeyedStoreIC::GenerateNonStrictArguments(MacroAssembler* masm) {
   __ mov(unmapped_location, eax);
   __ lea(edi, unmapped_location);
   __ mov(edx, eax);
-  __ RecordWrite(ebx, edi, edx);
+  __ RecordWrite(ebx, edi, edx, kDontSaveFPRegs);
   __ Ret();
   __ bind(&slow);
   GenerateMiss(masm, false);
@@ -734,7 +734,9 @@ void KeyedStoreIC::GenerateGeneric(MacroAssembler* masm,
   //  -- edx    : receiver
   //  -- esp[0] : return address
   // -----------------------------------
-  Label slow, fast, array, extra;
+  Label slow, fast_object_with_map_check, fast_object_without_map_check;
+  Label fast_double_with_map_check, fast_double_without_map_check;
+  Label check_if_double_array, array, extra;
 
   // Check that the object isn't a smi.
   __ JumpIfSmi(edx, &slow);
@@ -761,11 +763,11 @@ void KeyedStoreIC::GenerateGeneric(MacroAssembler* masm,
   // eax: value
   // edx: JSObject
   // ecx: key (a smi)
-  __ mov(edi, FieldOperand(edx, JSObject::kElementsOffset));
+  // edi: receiver map
+  __ mov(ebx, FieldOperand(edx, JSObject::kElementsOffset));
   // Check that the object is in fast mode and writable.
-  __ CheckMap(edi, FACTORY->fixed_array_map(), &slow, DONT_DO_SMI_CHECK);
-  __ cmp(ecx, FieldOperand(edi, FixedArray::kLengthOffset));
-  __ j(below, &fast);
+  __ cmp(ecx, FieldOperand(ebx, FixedArray::kLengthOffset));
+  __ j(below, &fast_object_with_map_check);
 
   // Slow case: call runtime.
   __ bind(&slow);
@@ -778,16 +780,26 @@ void KeyedStoreIC::GenerateGeneric(MacroAssembler* masm,
   // eax: value
   // edx: receiver, a JSArray
   // ecx: key, a smi.
-  // edi: receiver->elements, a FixedArray
+  // ebx: receiver->elements, a FixedArray
+  // edi: receiver map
   // flags: compare (ecx, edx.length())
   // do not leave holes in the array:
   __ j(not_equal, &slow);
-  __ cmp(ecx, FieldOperand(edi, FixedArray::kLengthOffset));
+  __ cmp(ecx, FieldOperand(ebx, FixedArray::kLengthOffset));
   __ j(above_equal, &slow);
-  // Add 1 to receiver->length, and go to fast array write.
+  __ CheckMap(ebx, FACTORY->fixed_array_map(),
+              &check_if_double_array, DONT_DO_SMI_CHECK);
+  // Add 1 to receiver->length, and go to common element store code for Objects.
   __ add(FieldOperand(edx, JSArray::kLengthOffset),
          Immediate(Smi::FromInt(1)));
-  __ jmp(&fast);
+  __ jmp(&fast_object_without_map_check);
+
+  __ bind(&check_if_double_array);
+  __ CheckMap(ebx, FACTORY->fixed_double_array_map(), &slow, DONT_DO_SMI_CHECK);
+  // Add 1 to receiver->length, and go to common element store code for doubles.
+  __ add(FieldOperand(edx, JSArray::kLengthOffset),
+         Immediate(Smi::FromInt(1)));
+  __ jmp(&fast_double_without_map_check);
 
   // Array case: Get the length and the elements array from the JS
   // array. Check that the array is in fast mode (and writable); if it
@@ -796,24 +808,59 @@ void KeyedStoreIC::GenerateGeneric(MacroAssembler* masm,
   // eax: value
   // edx: receiver, a JSArray
   // ecx: key, a smi.
-  __ mov(edi, FieldOperand(edx, JSObject::kElementsOffset));
-  __ CheckMap(edi, FACTORY->fixed_array_map(), &slow, DONT_DO_SMI_CHECK);
+  // edi: receiver map
+  __ mov(ebx, FieldOperand(edx, JSObject::kElementsOffset));
 
-  // Check the key against the length in the array, compute the
-  // address to store into and fall through to fast case.
+  // Check the key against the length in the array and fall through to the
+  // common store code.
   __ cmp(ecx, FieldOperand(edx, JSArray::kLengthOffset));  // Compare smis.
   __ j(above_equal, &extra);
 
-  // Fast case: Do the store.
-  __ bind(&fast);
+  // Fast case: Do the store, could either Object or double.
+  __ bind(&fast_object_with_map_check);
   // eax: value
   // ecx: key (a smi)
   // edx: receiver
-  // edi: FixedArray receiver->elements
-  __ mov(CodeGenerator::FixedArrayElementOperand(edi, ecx), eax);
+  // ebx: FixedArray receiver->elements
+  // edi: receiver map
+  __ CheckMap(ebx, FACTORY->fixed_array_map(),
+              &fast_double_with_map_check, DONT_DO_SMI_CHECK);
+  __ bind(&fast_object_without_map_check);
+  // Smi stores don't require further checks.
+  Label non_smi_value;
+  __ JumpIfNotSmi(eax, &non_smi_value);
+  // It's irrelevant whether array is smi-only or not when writing a smi.
+  __ mov(CodeGenerator::FixedArrayElementOperand(ebx, ecx), eax);
+  __ ret(0);
+
+  __ bind(&non_smi_value);
+  if (FLAG_smi_only_arrays) {
+    // Escape to slow case when writing non-smi into smi-only array.
+    __ CheckFastObjectElements(edi, &slow, Label::kNear);
+  }
+
+  // Fast elements array, store the value to the elements backing store.
+  __ mov(CodeGenerator::FixedArrayElementOperand(ebx, ecx), eax);
   // Update write barrier for the elements array address.
-  __ mov(edx, Operand(eax));
-  __ RecordWrite(edi, 0, edx, ecx);
+  __ mov(edx, Operand(eax));  // Preserve the value which is returned.
+  __ RecordWriteArray(
+      ebx, edx, ecx, kDontSaveFPRegs, EMIT_REMEMBERED_SET, OMIT_SMI_CHECK);
+  __ ret(0);
+
+  __ bind(&fast_double_with_map_check);
+  // Check for fast double array case. If this fails, call through to the
+  // runtime.
+  __ CheckMap(ebx, FACTORY->fixed_double_array_map(), &slow, DONT_DO_SMI_CHECK);
+  __ bind(&fast_double_without_map_check);
+  // If the value is a number, store it as a double in the FastDoubleElements
+  // array.
+  __ StoreNumberToDoubleElements(eax,
+                                 ebx,
+                                 ecx,
+                                 edx,
+                                 xmm0,
+                                 &slow,
+                                 false);
   __ ret(0);
 }
 
