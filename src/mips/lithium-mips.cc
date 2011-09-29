@@ -1740,7 +1740,7 @@ LInstruction* LChunkBuilder::DoConstant(HConstant* instr) {
 
 LInstruction* LChunkBuilder::DoLoadGlobalCell(HLoadGlobalCell* instr) {
   LLoadGlobalCell* result = new LLoadGlobalCell;
-  return instr->check_hole_value()
+  return instr->RequiresHoleCheck()
       ? AssignEnvironment(DefineAsRegister(result))
       : DefineAsRegister(result);
 }
@@ -1757,7 +1757,7 @@ LInstruction* LChunkBuilder::DoStoreGlobalCell(HStoreGlobalCell* instr) {
   LOperand* temp = TempRegister();
   LOperand* value = UseTempRegister(instr->value());
   LInstruction* result = new LStoreGlobalCell(value, temp);
-  if (instr->check_hole_value()) result = AssignEnvironment(result);
+  if (instr->RequiresHoleCheck()) result = AssignEnvironment(result);
   return result;
 }
 
