@@ -2606,6 +2606,9 @@ void JSProxy::Fix() {
   HandleScope scope(isolate);
   Handle<JSProxy> self(this);
 
+  // Save identity hash.
+  MaybeObject* maybe_hash = GetIdentityHash(OMIT_CREATION);
+
   if (IsJSFunctionProxy()) {
     isolate->factory()->BecomeJSFunction(self);
     // Code will be set on the JavaScript side.
@@ -2613,6 +2616,13 @@ void JSProxy::Fix() {
     isolate->factory()->BecomeJSObject(self);
   }
   ASSERT(self->IsJSObject());
+
+  // Inherit identity, if it was present.
+  Object* hash;
+  if (maybe_hash->To<Object>(&hash) && hash->IsSmi()) {
+    Handle<JSObject> new_self(JSObject::cast(*self));
+    isolate->factory()->SetIdentityHash(new_self, hash);
+  }
 }
 
 
@@ -2812,8 +2822,7 @@ MaybeObject* JSObject::SetLocalPropertyIgnoreAttributes(
         attributes);
   }
 
-  // Unlike SetLocalProperty, we ignore the prototype chain and
-  // any accessors in it.
+  // Check for accessor in prototype chain removed here in clone.
   if (!result.IsFound()) {
     // Neither properties nor transitions found.
     return AddProperty(name, value, attributes, kNonStrictMode);
@@ -10214,8 +10223,6 @@ class SubStringAsciiSymbolKey : public HashTableKey {
     ASSERT(length_ >= 0);
     ASSERT(from_ + length_ <= string_->length());
     StringHasher hasher(length_);
-    AssertNoAllocation no_alloc;
-    const char* chars = string_->GetChars() + from_;
 
     // Very long strings have a trivial hash that doesn't inspect the
     // string contents.
@@ -10226,14 +10233,16 @@ class SubStringAsciiSymbolKey : public HashTableKey {
       // Do the iterative array index computation as long as there is a
       // chance this is an array index.
       while (i < length_ && hasher.is_array_index()) {
-        hasher.AddCharacter(static_cast<uc32>(chars[i]));
+        hasher.AddCharacter(static_cast<uc32>(
+            string_->SeqAsciiStringGet(i + from_)));
         i++;
       }
 
       // Process the remaining characters without updating the array
       // index.
       while (i < length_) {
-        hasher.AddCharacterNoIndex(static_cast<uc32>(chars[i]));
+        hasher.AddCharacterNoIndex(static_cast<uc32>(
+            string_->SeqAsciiStringGet(i + from_)));
         i++;
       }
       hash_field_ = hasher.GetHashField();

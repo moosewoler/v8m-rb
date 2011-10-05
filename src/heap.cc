@@ -2340,7 +2340,6 @@ bool Heap::CreateInitialObjects() {
   set_intrinsic_function_names(StringDictionary::cast(obj));
 
   if (InitializeNumberStringCache()->IsFailure()) return false;
-  if (InitializeStringLocks()->IsFailure()) return false;
 
   // Allocate cache for single character ASCII strings.
   { MaybeObject* maybe_obj =
@@ -2554,76 +2553,6 @@ MaybeObject* Heap::Uint32ToString(uint32_t value,
   MaybeObject* maybe = NumberFromUint32(value);
   if (!maybe->To<Object>(&number)) return maybe;
   return NumberToString(number, check_number_string_cache);
-}
-
-
-MaybeObject* Heap::LockString(String* string) {
-  ASSERT(!string->IsConsString());
-  FixedArray* locks = string_locks();
-  ASSERT(locks->length() > 1);
-  int length = locks->length();
-  int element_count = Smi::cast(locks->get(0))->value();
-  int element_index = element_count + 1;
-  if (element_index >= length) {
-    int new_length = length * 2;
-    MaybeObject* allocation = AllocateFixedArray(new_length);
-    FixedArray* new_locks = NULL;  // Initialized to please compiler.
-    if (!allocation->To<FixedArray>(&new_locks)) return allocation;
-    for (int i = 1; i < length; i++) {
-      new_locks->set(i, locks->get(i));
-    }
-    set_string_locks(new_locks);
-    locks = new_locks;
-  }
-  locks->set(element_index, string);
-  locks->set(0, Smi::FromInt(element_index));
-  return string;
-}
-
-
-void Heap::UnlockString(String* string) {
-  FixedArray* locks = string_locks();
-  ASSERT(locks->length() > 1);
-  int element_count = Smi::cast(locks->get(0))->value();
-  ASSERT(element_count > 0);
-  ASSERT(element_count < locks->length());
-  for (int i = 1; i <= element_count; i++) {
-    String* element = String::cast(locks->get(i));
-    if (element == string) {
-      if (i < element_count) {
-        locks->set(i, locks->get(element_count));
-      }
-      locks->set_undefined(element_count);
-      locks->set(0, Smi::FromInt(element_count - 1));
-      return;
-    }
-  }
-  // We should have found the string. It's an error to try to unlock
-  // a string that hasn't been locked.
-  UNREACHABLE();
-}
-
-
-bool Heap::IsStringLocked(String* string) {
-  if (string->IsConsString()) return false;
-  FixedArray* locks = string_locks();
-  ASSERT(locks->length() > 1);
-  int element_count = Smi::cast(locks->get(0))->value();
-  for (int i = 1; i <= element_count; i++) {
-    if (locks->get(i) == string) return true;
-  }
-  return false;
-}
-
-
-MaybeObject* Heap::InitializeStringLocks() {
-  const int kInitialSize = 6;
-  MaybeObject* allocation = AllocateFixedArray(kInitialSize);
-  if (allocation->IsFailure()) return allocation;
-  FixedArray* new_array = FixedArray::cast(allocation->ToObjectUnchecked());
-  new_array->set(0, Smi::FromInt(0));
-  set_string_locks(new_array);
-  return new_array;
 }
 
 
@@ -3321,9 +3250,9 @@ MaybeObject* Heap::Allocate(Map* map, AllocationSpace space) {
 }
 
 
-MaybeObject* Heap::InitializeFunction(JSFunction* function,
-                                      SharedFunctionInfo* shared,
-                                      Object* prototype) {
+void Heap::InitializeFunction(JSFunction* function,
+                              SharedFunctionInfo* shared,
+                              Object* prototype) {
   ASSERT(!prototype->IsMap());
   function->initialize_properties();
   function->initialize_elements();
@@ -3333,7 +3262,6 @@ MaybeObject* Heap::InitializeFunction(JSFunction* function,
   function->set_context(undefined_value());
   function->set_literals(empty_fixed_array());
   function->set_next_function_link(undefined_value());
-  return function;
 }
 
 
@@ -3379,7 +3307,8 @@ MaybeObject* Heap::AllocateFunction(Map* function_map,
   { MaybeObject* maybe_result = Allocate(function_map, space);
     if (!maybe_result->ToObject(&result)) return maybe_result;
   }
-  return InitializeFunction(JSFunction::cast(result), shared, prototype);
+  InitializeFunction(JSFunction::cast(result), shared, prototype);
+  return result;
 }
 
 
@@ -3819,9 +3748,6 @@ MaybeObject* Heap::ReinitializeJSReceiver(
     JSReceiver* object, InstanceType type, int size) {
   ASSERT(type >= FIRST_JS_OBJECT_TYPE);
 
-  // Save identity hash.
-  MaybeObject* maybe_hash = object->GetIdentityHash(OMIT_CREATION);
-
   // Allocate fresh map.
   // TODO(rossberg): Once we optimize proxies, cache these maps.
   Map* map;
@@ -3837,9 +3763,21 @@ MaybeObject* Heap::ReinitializeJSReceiver(
   // Allocate the backing storage for the properties.
   int prop_size = map->unused_property_fields() - map->inobject_properties();
   Object* properties;
-  { MaybeObject* maybe_properties = AllocateFixedArray(prop_size, TENURED);
-    if (!maybe_properties->ToObject(&properties)) return maybe_properties;
+  maybe = AllocateFixedArray(prop_size, TENURED);
+  if (!maybe->ToObject(&properties)) return maybe;
+
+  // Functions require some allocation, which might fail here.
+  SharedFunctionInfo* shared = NULL;
+  if (type == JS_FUNCTION_TYPE) {
+    String* name;
+    maybe = LookupAsciiSymbol("<freezing call trap>");
+    if (!maybe->To<String>(&name)) return maybe;
+    maybe = AllocateSharedFunctionInfo(name);
+    if (!maybe->To<SharedFunctionInfo>(&shared)) return maybe;
   }
+
+  // Because of possible retries of this function after failure,
+  // we must NOT fail after this point, where we have changed the type!
 
   // Reset the map for the object.
   object->set_map(map);
@@ -3851,30 +3789,15 @@ MaybeObject* Heap::ReinitializeJSReceiver(
   // Functions require some minimal initialization.
   if (type == JS_FUNCTION_TYPE) {
     map->set_function_with_prototype(true);
-    String* name;
-    maybe = LookupAsciiSymbol("<freezing call trap>");
-    if (!maybe->To<String>(&name)) return maybe;
-    SharedFunctionInfo* shared;
-    maybe = AllocateSharedFunctionInfo(name);
-    if (!maybe->To<SharedFunctionInfo>(&shared)) return maybe;
-    JSFunction* func;
-    maybe = InitializeFunction(
-        JSFunction::cast(object), shared, the_hole_value());
-    if (!maybe->To<JSFunction>(&func)) return maybe;
-    func->set_context(isolate()->context()->global_context());
+    InitializeFunction(JSFunction::cast(object), shared, the_hole_value());
+    JSFunction::cast(object)->set_context(
+        isolate()->context()->global_context());
   }
 
   // Put in filler if the new object is smaller than the old.
   if (size_difference > 0) {
     CreateFillerObjectAt(
         object->address() + map->instance_size(), size_difference);
-  }
-
-  // Inherit identity, if it was present.
-  Object* hash;
-  if (maybe_hash->To<Object>(&hash) && hash->IsSmi()) {
-    maybe = jsobj->SetIdentityHash(hash, ALLOW_CREATION);
-    if (maybe->IsFailure()) return maybe;
   }
 
   return object;
