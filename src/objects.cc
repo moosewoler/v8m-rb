@@ -545,7 +545,9 @@ MaybeObject* Object::GetProperty(Object* receiver,
   // holder in the prototype chain.
   // Proxy handlers do not use the proxy's prototype, so we can skip this.
   if (!result->IsHandler()) {
-    Object* last = result->IsProperty() ? result->holder() : heap->null_value();
+    Object* last = result->IsProperty()
+        ? result->holder()
+        : Object::cast(heap->null_value());
     ASSERT(this != this->GetPrototype());
     for (Object* current = this; true; current = current->GetPrototype()) {
       if (current->IsAccessCheckNeeded()) {
@@ -7765,7 +7767,6 @@ MaybeObject* JSObject::SetFastElementsCapacityAndLength(
   if (elements()->map() != heap->non_strict_arguments_elements_map()) {
     Object* object;
     bool has_fast_smi_only_elements =
-        FLAG_smi_only_arrays &&
         (set_capacity_mode == kAllowSmiOnlyElements) &&
         (elements()->map()->has_fast_smi_only_elements() ||
          elements() == heap->empty_fixed_array());
@@ -10528,7 +10529,7 @@ template class HashTable<CompilationCacheShape, HashTableKey*>;
 
 template class HashTable<MapCacheShape, HashTableKey*>;
 
-template class HashTable<ObjectHashTableShape, JSObject*>;
+template class HashTable<ObjectHashTableShape, JSReceiver*>;
 
 template class Dictionary<StringDictionaryShape, String*>;
 
