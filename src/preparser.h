@@ -118,9 +118,12 @@ class PreParser {
   // during parsing.
   static PreParseResult PreParseProgram(i::JavaScriptScanner* scanner,
                                         i::ParserRecorder* log,
-                                        bool allow_lazy,
+                                        int flags,
                                         uintptr_t stack_limit) {
-    return PreParser(scanner, log, stack_limit, allow_lazy).PreParse();
+    bool allow_lazy = (flags & i::kAllowLazy) != 0;
+    bool allow_natives_syntax = (flags & i::kAllowNativesSyntax) != 0;
+    return PreParser(scanner, log, stack_limit,
+                     allow_lazy, allow_natives_syntax).PreParse();
   }
 
  private:
@@ -177,6 +180,12 @@ class PreParser {
     kSourceElement,
     kStatement,
     kForStatement
+  };
+
+  // If a list of variable declarations includes any initializers.
+  enum VariableDeclarationProperties {
+    kHasInitializers,
+    kHasNoInitializers
   };
 
   class Expression;
@@ -437,7 +446,8 @@ class PreParser {
   PreParser(i::JavaScriptScanner* scanner,
             i::ParserRecorder* log,
             uintptr_t stack_limit,
-            bool allow_lazy)
+            bool allow_lazy,
+            bool allow_natives_syntax)
       : scanner_(scanner),
         log_(log),
         scope_(NULL),
@@ -445,7 +455,8 @@ class PreParser {
         strict_mode_violation_location_(i::Scanner::Location::invalid()),
         strict_mode_violation_type_(NULL),
         stack_overflow_(false),
-        allow_lazy_(true),
+        allow_lazy_(allow_lazy),
+        allow_natives_syntax_(allow_natives_syntax),
         parenthesized_function_(false),
         harmony_scoping_(scanner->HarmonyScoping()) { }
 
@@ -493,6 +504,7 @@ class PreParser {
   Statement ParseVariableStatement(VariableDeclarationContext var_context,
                                    bool* ok);
   Statement ParseVariableDeclarations(VariableDeclarationContext var_context,
+                                      VariableDeclarationProperties* decl_props,
                                       int* num_decl,
                                       bool* ok);
   Statement ParseExpressionOrLabelledStatement(bool* ok);
@@ -607,6 +619,7 @@ class PreParser {
   const char* strict_mode_violation_type_;
   bool stack_overflow_;
   bool allow_lazy_;
+  bool allow_natives_syntax_;
   bool parenthesized_function_;
   bool harmony_scoping_;
 };
