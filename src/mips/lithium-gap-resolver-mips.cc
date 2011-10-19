@@ -36,9 +36,11 @@ namespace internal {
 static const Register kSavedValueRegister = lithiumScratchReg;
 static const DoubleRegister kSavedDoubleValueRegister = lithiumScratchDouble;
 
-LGapResolver::LGapResolver(LCodeGen* owner)
-    : cgen_(owner), moves_(32), root_index_(0), in_cycle_(false),
-      saved_destination_(NULL) { }
+LGapResolver::LGapResolver(LCodeGen* owner) : cgen_(owner),
+                                              moves_(32),
+                                              root_index_(0),
+                                              in_cycle_(false),
+                                              saved_destination_(NULL) { }
 
 
 void LGapResolver::Resolve(LParallelMove* parallel_move) {
