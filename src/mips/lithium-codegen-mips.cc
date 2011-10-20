@@ -3453,11 +3453,12 @@ void LCodeGen::DoTransitionElementsKind(LTransitionElementsKind* instr) {
   ElementsKind from_kind = from_map->elements_kind();
   ElementsKind to_kind = to_map->elements_kind();
 
-  Label not_applicable;
+  Label not_applicable, skip;
   __ lw(scratch, FieldMemOperand(object_reg, HeapObject::kMapOffset));
-// __ cmp(scratch, Operand(from_map));
-// __ b(ne, &not_applicable);
-  __ Branch(&not_applicable, ne, scratch, Operand(from_map));
+  __ Branch(&skip, eq, scratch, Operand(from_map));
+  __ mov(ToRegister(instr->result()), object_reg);
+  __ Branch(&not_applicable);
+  __ bind(&skip);
 
   __ li(new_map_reg, Operand(to_map));
   if (from_kind == FAST_SMI_ONLY_ELEMENTS && to_kind == FAST_ELEMENTS) {
@@ -3465,6 +3466,7 @@ void LCodeGen::DoTransitionElementsKind(LTransitionElementsKind* instr) {
     // Write barrier.
     __ RecordWriteField(object_reg, HeapObject::kMapOffset, new_map_reg,
                         scratch, kRAHasBeenSaved, kDontSaveFPRegs);
+    __ mov(ToRegister(instr->result()), object_reg);
   } else if (from_kind == FAST_SMI_ONLY_ELEMENTS &&
       to_kind == FAST_DOUBLE_ELEMENTS) {
     Register fixed_object_reg = ToRegister(instr->temp_reg());
