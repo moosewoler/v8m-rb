@@ -760,8 +760,9 @@ void Deoptimizer::EntryGenerator::Generate() {
   }
 
   // Set up the roots register.
-  ExternalReference roots_address = ExternalReference::roots_address(isolate);
-  __ li(roots, Operand(roots_address));
+  ExternalReference roots_array_start =
+      ExternalReference::roots_array_start(isolate);
+  __ li(roots, Operand(roots_array_start));
 
   __ pop(at);  // Get continuation, leave pc on stack.
   __ pop(ra);
