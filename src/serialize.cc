@@ -494,6 +494,10 @@ void ExternalReferenceTable::PopulateTable(Isolate* isolate) {
       UNCLASSIFIED,
       44,
       "canonical_nan");
+  Add(ExternalReference::address_of_the_hole_nan().address(),
+      UNCLASSIFIED,
+      45,
+      "the_hole_nan");
 }
 
 
@@ -1163,7 +1167,8 @@ void Serializer::VisitPointers(Object** start, Object** end) {
 
   for (Object** current = start; current < end; current++) {
     if (start == isolate->heap()->roots_array_start()) {
-      root_index_wave_front_ = Max(root_index_wave_front_, current - start);
+      root_index_wave_front_ =
+          Max(root_index_wave_front_, static_cast<intptr_t>(current - start));
     }
     if (reinterpret_cast<Address>(current) ==
         isolate->heap()->store_buffer()->TopAddress()) {
