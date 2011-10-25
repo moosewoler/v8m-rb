@@ -3469,6 +3469,8 @@ void LCodeGen::DoTransitionElementsKind(LTransitionElementsKind* instr) {
   ElementsKind from_kind = from_map->elements_kind();
   ElementsKind to_kind = to_map->elements_kind();
 
+  __ mov(ToRegister(instr->result()), object_reg);
+
   Label not_applicable;
   __ lw(scratch, FieldMemOperand(object_reg, HeapObject::kMapOffset));
   __ Branch(&not_applicable, ne, scratch, Operand(from_map));
@@ -3498,7 +3500,6 @@ void LCodeGen::DoTransitionElementsKind(LTransitionElementsKind* instr) {
     UNREACHABLE();
   }
   __ bind(&not_applicable);
-  __ mov(ToRegister(instr->result()), object_reg);
 }
 
 
