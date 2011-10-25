@@ -25,59 +25,38 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "v8.h"
+// Test deoptimization after inlined call.
 
-#include "ast.h"
-#include "scopes.h"
-#include "variables.h"
+function bar(a, b) {try { return a; } finally { } }
 
-namespace v8 {
-namespace internal {
-
-// ----------------------------------------------------------------------------
-// Implementation Variable.
-
-const char* Variable::Mode2String(VariableMode mode) {
-  switch (mode) {
-    case VAR: return "VAR";
-    case CONST: return "CONST";
-    case CONST_HARMONY: return "CONST";
-    case LET: return "LET";
-    case DYNAMIC: return "DYNAMIC";
-    case DYNAMIC_GLOBAL: return "DYNAMIC_GLOBAL";
-    case DYNAMIC_LOCAL: return "DYNAMIC_LOCAL";
-    case INTERNAL: return "INTERNAL";
-    case TEMPORARY: return "TEMPORARY";
+function test_context() {
+  function foo(x) { return 42; }
+  var s, t;
+  for (var i = 0x7ff00000; i < 0x80000000; i++) {
+    bar(t = foo(i) ? bar(42 + i - i) : bar(0), s = i + t);
   }
-  UNREACHABLE();
-  return NULL;
+  return s;
 }
+assertEquals(0x7fffffff + 42, test_context());
 
 
-Variable::Variable(Scope* scope,
-                   Handle<String> name,
-                   VariableMode mode,
-                   bool is_valid_LHS,
-                   Kind kind)
-  : scope_(scope),
-    name_(name),
-    mode_(mode),
-    kind_(kind),
-    location_(UNALLOCATED),
-    index_(-1),
-    local_if_not_shadowed_(NULL),
-    is_valid_LHS_(is_valid_LHS),
-    is_accessed_from_inner_scope_(false),
-    is_used_(false) {
-  // names must be canonicalized for fast equality checks
-  ASSERT(name->IsSymbol());
+function value_context() {
+  function foo(x) { return 42; }
+  var s, t;
+  for (var i = 0x7ff00000; i < 0x80000000; i++) {
+    bar(t = foo(i), s = i + t);
+  }
+  return s;
 }
+assertEquals(0x7fffffff + 42, value_context());
 
 
-bool Variable::is_global() const {
-  // Temporaries are never global, they must always be allocated in the
-  // activation frame.
-  return mode_ != TEMPORARY && scope_ != NULL && scope_->is_global_scope();
+function effect_context() {
+  function foo(x) { return 42; }
+  var s, t;
+  for (var i = 0x7ff00000; i < 0x80000000; i++) {
+    bar(foo(i), s = i + 42);
+  }
+  return s;
 }
-
-} }  // namespace v8::internal
+assertEquals(0x7fffffff + 42, effect_context());
