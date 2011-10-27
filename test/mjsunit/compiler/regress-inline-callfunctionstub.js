@@ -25,25 +25,22 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// A simple interpreter for the Irregexp byte code.
+// Flags: --allow-natives-syntax
 
-#ifndef V8_INTERPRETER_IRREGEXP_H_
-#define V8_INTERPRETER_IRREGEXP_H_
+// Test inlined of calls-as-function two levels deep.
+function f() { return 42; }
 
-namespace v8 {
-namespace internal {
+var o = {g : function () { return f(); } }
+function main(func) {
+  var v=0;
+  for (var i=0; i<1; i++) {
+    if (func()) v = 42;
+  }
+}
 
+main(o.g);
+main(o.g);
+main(o.g);
+%OptimizeFunctionOnNextCall(main);
+main(o.g);
 
-class IrregexpInterpreter {
- public:
-  static RegExpImpl::IrregexpResult Match(Isolate* isolate,
-                                          Handle<ByteArray> code,
-                                          Handle<String> subject,
-                                          int* captures,
-                                          int start_position);
-};
-
-
-} }  // namespace v8::internal
-
-#endif  // V8_INTERPRETER_IRREGEXP_H_

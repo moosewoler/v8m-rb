@@ -246,20 +246,6 @@ Handle<Code> StubCache::ComputeLoadNormal() {
 }
 
 
-Handle<Code> LoadStubCompiler::CompileLoadGlobal(
-    Handle<JSObject> object,
-    Handle<GlobalObject> holder,
-    Handle<JSGlobalPropertyCell> cell,
-    Handle<String> name,
-    bool is_dont_delete) {
-  CALL_HEAP_FUNCTION(isolate(),
-                     (set_failure(NULL),
-                      CompileLoadGlobal(
-                          *object, *holder, *cell, *name, is_dont_delete)),
-                     Code);
-}
-
-
 Handle<Code> StubCache::ComputeLoadGlobal(Handle<String> name,
                                           Handle<JSObject> receiver,
                                           Handle<GlobalObject> holder,
@@ -431,20 +417,6 @@ Handle<Code> StubCache::ComputeKeyedLoadFunctionPrototype(
 }
 
 
-Handle<Code> StoreStubCompiler::CompileStoreField(Handle<JSObject> object,
-                                                  int index,
-                                                  Handle<Map> transition,
-                                                  Handle<String> name) {
-  CALL_HEAP_FUNCTION(
-      isolate(),
-      (set_failure(NULL),
-       CompileStoreField(*object, index,
-                         transition.is_null() ? NULL : *transition,
-                         *name)),
-      Code);
-}
-
-
 Handle<Code> StubCache::ComputeStoreField(Handle<String> name,
                                           Handle<JSObject> receiver,
                                           int field_index,
@@ -463,21 +435,6 @@ Handle<Code> StubCache::ComputeStoreField(Handle<String> name,
   GDBJIT(AddCode(GDBJITInterface::STORE_IC, *name, *code));
   JSObject::UpdateMapCodeCache(receiver, name, code);
   return code;
-}
-
-
-Handle<Code> KeyedLoadStubCompiler::CompileLoadElement(Handle<Map> map) {
-  CALL_HEAP_FUNCTION(isolate(),
-                     (set_failure(NULL), CompileLoadElement(*map)),
-                     Code);
-}
-
-
-Handle<Code> KeyedStoreStubCompiler::CompileStoreElement(Handle<Map> map) {
-  CALL_HEAP_FUNCTION(isolate(),
-                     (set_failure(NULL),
-                      CompileStoreElement(*map)),
-                      Code);
 }
 
 
@@ -536,62 +493,10 @@ Handle<Code> StubCache::ComputeKeyedLoadOrStoreElement(
 }
 
 
-Handle<Code> KeyedLoadStubCompiler::CompileLoadPolymorphic(
-    MapHandleList* receiver_maps,
-    CodeHandleList* handler_stubs) {
-  MapList raw_receiver_maps(receiver_maps->length());
-  CodeList raw_handler_stubs(handler_stubs->length());
-  CALL_HEAP_FUNCTION(
-      isolate(),
-      (set_failure(NULL),
-       raw_receiver_maps.Clear(),
-       raw_handler_stubs.Clear(),
-       CompileLoadPolymorphic(UnwrapHandleList(&raw_receiver_maps,
-                                               receiver_maps),
-                              UnwrapHandleList(&raw_handler_stubs,
-                                               handler_stubs))),
-      Code);
-}
-
-
-Handle<Code> KeyedStoreStubCompiler::CompileStorePolymorphic(
-    MapHandleList* receiver_maps,
-    CodeHandleList* handler_stubs,
-    MapHandleList* transitioned_maps) {
-  MapList raw_receiver_maps(receiver_maps->length());
-  CodeList raw_handler_stubs(handler_stubs->length());
-  MapList raw_transitioned_maps(transitioned_maps->length());
-  CALL_HEAP_FUNCTION(
-      isolate(),
-      (set_failure(NULL),
-       raw_receiver_maps.Clear(),
-       raw_handler_stubs.Clear(),
-       raw_transitioned_maps.Clear(),
-       CompileStorePolymorphic(UnwrapHandleList(&raw_receiver_maps,
-                                                receiver_maps),
-                               UnwrapHandleList(&raw_handler_stubs,
-                                                handler_stubs),
-                               UnwrapHandleList(&raw_transitioned_maps,
-                                                transitioned_maps))),
-      Code);
-}
-
-
 Handle<Code> StubCache::ComputeStoreNormal(StrictModeFlag strict_mode) {
   return (strict_mode == kStrictMode)
       ? isolate_->builtins()->Builtins::StoreIC_Normal_Strict()
       : isolate_->builtins()->Builtins::StoreIC_Normal();
-}
-
-
-Handle<Code> StoreStubCompiler::CompileStoreGlobal(
-    Handle<GlobalObject> object,
-    Handle<JSGlobalPropertyCell> holder,
-    Handle<String> name) {
-  CALL_HEAP_FUNCTION(isolate(),
-                     (set_failure(NULL),
-                      CompileStoreGlobal(*object, *holder, *name)),
-                     Code);
 }
 
 
@@ -610,17 +515,6 @@ Handle<Code> StubCache::ComputeStoreGlobal(Handle<String> name,
   GDBJIT(AddCode(GDBJITInterface::STORE_IC, *name, *code));
   JSObject::UpdateMapCodeCache(receiver, name, code);
   return code;
-}
-
-
-Handle<Code> StoreStubCompiler::CompileStoreCallback(
-    Handle<JSObject> object,
-    Handle<AccessorInfo> callback,
-    Handle<String> name) {
-  CALL_HEAP_FUNCTION(isolate(),
-                     (set_failure(NULL),
-                      CompileStoreCallback(*object, *callback, *name)),
-                     Code);
 }
 
 
@@ -643,15 +537,6 @@ Handle<Code> StubCache::ComputeStoreCallback(Handle<String> name,
 }
 
 
-Handle<Code> StoreStubCompiler::CompileStoreInterceptor(Handle<JSObject> object,
-                                                        Handle<String> name) {
-  CALL_HEAP_FUNCTION(isolate(),
-                     (set_failure(NULL),
-                      CompileStoreInterceptor(*object, *name)),
-                     Code);
-}
-
-
 Handle<Code> StubCache::ComputeStoreInterceptor(Handle<String> name,
                                                 Handle<JSObject> receiver,
                                                 StrictModeFlag strict_mode) {
@@ -666,19 +551,6 @@ Handle<Code> StubCache::ComputeStoreInterceptor(Handle<String> name,
   GDBJIT(AddCode(GDBJITInterface::STORE_IC, *name, *code));
   JSObject::UpdateMapCodeCache(receiver, name, code);
   return code;
-}
-
-Handle<Code> KeyedStoreStubCompiler::CompileStoreField(Handle<JSObject> object,
-                                                       int index,
-                                                       Handle<Map> transition,
-                                                       Handle<String> name) {
-  CALL_HEAP_FUNCTION(
-      isolate(),
-      (set_failure(NULL),
-       CompileStoreField(*object, index,
-                         transition.is_null() ? NULL : *transition,
-                         *name)),
-      Code);
 }
 
 Handle<Code> StubCache::ComputeKeyedStoreField(Handle<String> name,
@@ -1655,39 +1527,26 @@ MaybeObject* KeyedLoadStubCompiler::TryGetCode(PropertyType type,
 }
 
 
-MaybeObject* StoreStubCompiler::GetCode(PropertyType type, String* name) {
+Handle<Code> StoreStubCompiler::GetCode(PropertyType type,
+                                        Handle<String> name) {
   Code::Flags flags =
       Code::ComputeMonomorphicFlags(Code::STORE_IC, type, strict_mode_);
-  MaybeObject* result = TryGetCodeWithFlags(flags, name);
-  if (!result->IsFailure()) {
-    PROFILE(isolate(),
-            CodeCreateEvent(Logger::STORE_IC_TAG,
-                            Code::cast(result->ToObjectUnchecked()),
-                            name));
-    GDBJIT(AddCode(GDBJITInterface::STORE_IC,
-                   name,
-                   Code::cast(result->ToObjectUnchecked())));
-  }
-  return result;
+  Handle<Code> code = GetCodeWithFlags(flags, name);
+  PROFILE(isolate(), CodeCreateEvent(Logger::STORE_IC_TAG, *code, *name));
+  GDBJIT(AddCode(GDBJITInterface::STORE_IC, *name, *code));
+  return code;
 }
 
 
-MaybeObject* KeyedStoreStubCompiler::GetCode(PropertyType type,
-                                             String* name,
+Handle<Code> KeyedStoreStubCompiler::GetCode(PropertyType type,
+                                             Handle<String> name,
                                              InlineCacheState state) {
   Code::Flags flags =
       Code::ComputeFlags(Code::KEYED_STORE_IC, state, strict_mode_, type);
-  MaybeObject* result = TryGetCodeWithFlags(flags, name);
-  if (!result->IsFailure()) {
-    PROFILE(isolate(),
-            CodeCreateEvent(Logger::KEYED_STORE_IC_TAG,
-                            Code::cast(result->ToObjectUnchecked()),
-                            name));
-    GDBJIT(AddCode(GDBJITInterface::KEYED_STORE_IC,
-                   name,
-                   Code::cast(result->ToObjectUnchecked())));
-  }
-  return result;
+  Handle<Code> code = GetCodeWithFlags(flags, name);
+  PROFILE(isolate(), CodeCreateEvent(Logger::KEYED_STORE_IC_TAG, *code, *name));
+  GDBJIT(AddCode(GDBJITInterface::KEYED_STORE_IC, *name, *code));
+  return code;
 }
 
 
