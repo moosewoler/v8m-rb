@@ -753,6 +753,11 @@ void Deserializer::ReadObject(int space_number,
 
 static const int kUnknownOffsetFromStart = -1;
 
+#ifdef V8_TARGET_ARCH_MIPS
+#define PATCH_SITE_ADJUST (- 3 * Assembler::kInstrSize)
+#else
+#define PATCH_SITE_ADJUST 0
+#endif
 
 void Deserializer::ReadChunk(Object** current,
                              Object** limit,
@@ -825,8 +830,11 @@ void Deserializer::ReadChunk(Object** current,
           if (how == kFromCode) {                                              \
             Address location_of_branch_data =                                  \
                 reinterpret_cast<Address>(current);                            \
-            Assembler::set_target_at(location_of_branch_data,                  \
+            Assembler::set_target_at(location_of_branch_data                   \
+                                     + PATCH_SITE_ADJUST,                      \
                                      reinterpret_cast<Address>(new_object));   \
+            current_was_incremented =                                          \
+              Assembler::kCallTargetSize ? false : true;                       \
             if (within == kFirstInstruction) {                                 \
               location_of_branch_data += Assembler::kCallTargetSize;           \
               current = reinterpret_cast<Object**>(location_of_branch_data);   \
@@ -959,6 +967,9 @@ void Deserializer::ReadChunk(Object** current,
       // Deserialize a new object and write a pointer to it to the current
       // object.
       ONE_PER_SPACE(kNewObject, kPlain, kStartOfObject)
+      // Deserialize a new object from pointer found in code and write
+      // a pointer to it to the current object. Required only for MIPS.
+      ONE_PER_SPACE(kNewObject, kFromCode, kStartOfObject)
       // Support for direct instruction pointers in functions
       ONE_PER_CODE_SPACE(kNewObject, kPlain, kFirstInstruction)
       // Deserialize a new code object and write a pointer to its first
@@ -967,6 +978,10 @@ void Deserializer::ReadChunk(Object** current,
       // Find a recently deserialized object using its offset from the current
       // allocation point and write a pointer to it to the current object.
       ALL_SPACES(kBackref, kPlain, kStartOfObject)
+      // Find a recently deserialized code object using its offset from the
+      // current allocation point and write a pointer to it to the current
+      // object. Required only for MIPS.
+      ALL_SPACES(kBackref, kFromCode, kStartOfObject)
       // Find a recently deserialized code object using its offset from the
       // current allocation point and write a pointer to its first instruction
       // to the current code object or the instruction pointer in a function
@@ -981,10 +996,21 @@ void Deserializer::ReadChunk(Object** current,
       // start and write a pointer to its first instruction to the current code
       // object.
       ALL_SPACES(kFromStart, kFromCode, kFirstInstruction)
+      // Find an already deserialized code object using its offset from
+      // the start and write a pointer to it to the current object.
+      // Required only for MIPS.
+      ALL_SPACES(kFromStart, kFromCode, kStartOfObject)
       // Find an object in the roots array and write a pointer to it to the
       // current object.
       CASE_STATEMENT(kRootArray, kPlain, kStartOfObject, 0)
       CASE_BODY(kRootArray, kPlain, kStartOfObject, 0, kUnknownOffsetFromStart)
+      //Required only for MIPS.
+      CASE_STATEMENT(kRootArray, kFromCode, kStartOfObject, 0)
+      CASE_BODY(kRootArray,
+                kFromCode,
+                kStartOfObject,
+                0,
+                kUnknownOffsetFromStart)
       // Find an object in the partial snapshots cache and write a pointer to it
       // to the current object.
       CASE_STATEMENT(kPartialSnapshotCache, kPlain, kStartOfObject, 0)
