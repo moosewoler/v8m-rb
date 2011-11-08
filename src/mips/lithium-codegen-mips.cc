@@ -3950,15 +3950,18 @@ void LCodeGen::DoDeferredTaggedToI(LTaggedToI* instr) {
     // Deopt if the operation did not succeed.
     DeoptimizeIf(ne, instr->environment(), except_flag, Operand(zero_reg));
 
-    // Load the result.
-    __ mfc1(input_reg, single_scratch);
-
     if (instr->hydrogen()->CheckFlag(HValue::kBailoutOnMinusZero)) {
+        // Load the result.
+      __ mov(scratch1, input_reg);
+      __ mfc1(input_reg, single_scratch);
       __ Branch(&done, ne, input_reg, Operand(zero_reg));
-
+      __ ldc1(double_scratch,
+            FieldMemOperand(scratch1, HeapNumber::kValueOffset));
       __ mfc1(scratch1, double_scratch.high());
       __ And(scratch1, scratch1, Operand(HeapNumber::kSignMask));
       DeoptimizeIf(ne, instr->environment(), scratch1, Operand(zero_reg));
+    } else {
+      __ mfc1(input_reg, single_scratch);
     }
   }
   __ bind(&done);
