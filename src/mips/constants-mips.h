@@ -47,6 +47,13 @@
 #endif
 
 
+#ifdef _MIPS_ARCH_MIPS3
+  #define mips3 1
+#else
+  #define mips3 0
+#endif
+
+
 #if(defined(__mips_hard_float) && __mips_hard_float != 0)
 // Use floating-point coprocessor instructions. This flag is raised when
 // -mhard-float is passed to the compiler.

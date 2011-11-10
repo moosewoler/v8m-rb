@@ -449,7 +449,7 @@ void MacroAssembler::LoadFromNumberDictionary(Label* miss,
 
   // hash = hash * 2057;
   li(reg1, Operand(2057));
-  mul(reg0, reg0, reg1);
+  Mul(reg0, reg0, reg1);
 
   // hash = hash ^ (hash >> 16);
   srl(at, reg0, 16);
@@ -541,12 +541,22 @@ void MacroAssembler::Subu(Register rd, Register rs, const Operand& rt) {
 
 void MacroAssembler::Mul(Register rd, Register rs, const Operand& rt) {
   if (rt.is_reg()) {
-    mul(rd, rs, rt.rm());
+    if (mips3) {
+      mult(rs, rt.rm());
+      mflo(rd);
+    } else {
+      mul(rd, rs, rt.rm());
+    }
   } else {
     // li handles the relocation.
     ASSERT(!rs.is(at));
     li(at, rt);
-    mul(rd, rs, at);
+    if (mips3) {
+      mult(rs, at);
+      mflo(rd);
+    } else {
+      mul(rd, rs, at);
+    }
   }
 }
 
@@ -1126,6 +1136,104 @@ void MacroAssembler::Move(FPURegister dst, double imm) {
 }
 
 
+void MacroAssembler::Movz(Register rd, Register rs, Register rt) {
+  if (mips3) {
+    Label done;
+    Branch(&done, ne, rt, Operand(zero_reg));
+    mov(rd, rs);
+    bind(&done);
+  } else {
+    movz(rd, rs, rt);
+  }
+}
+
+
+void MacroAssembler::Movn(Register rd, Register rs, Register rt) {
+  if (mips3) {
+    Label done;
+    Branch(&done, eq, rt, Operand(zero_reg));
+    mov(rd, rs);
+    bind(&done);
+  } else {
+    movn(rd, rs, rt);
+  }
+}
+
+
+void MacroAssembler::Movt(Register rd, Register rs, uint16_t cc){
+  if (mips3) {
+    // Tests an FP condition code and then conditionally move rs to rd.
+    // We do not currently use any FPU cc bit other than bit 0.
+    ASSERT(cc == 0);
+    ASSERT(!(rs.is(t8) || rd.is(t8)));
+    Label done;
+    Register scratch = t8;
+    // For testing purposes we need to fetch content of the FCSR register and
+    // than test its cc (floating point condition code) bit (for cc = 0, it is
+    // 24. bit of the FCSR).
+    cfc1(scratch, FCSR);
+    // For the MIPS I, II and III architectures, the contents of scratch is
+    // UNPREDICTABLE for the instruction immediately following CFC1.
+    nop();
+    srl(scratch, scratch, 16);
+    andi(scratch, scratch, 0x0080);
+    Branch(&done, eq, scratch, Operand(zero_reg));
+    mov(rd, rs);
+    bind(&done);
+  } else {
+    movt(rd, rs, cc);
+  }
+}
+
+
+void MacroAssembler::Movf(Register rd, Register rs, uint16_t cc){
+  if (mips3) {
+    // Tests an FP condition code and then conditionally move rs to rd.
+    // We do not currently use any FPU cc bit other than bit 0.
+    ASSERT(cc == 0);
+    ASSERT(!(rs.is(t8) || rd.is(t8)));
+    Label done;
+    Register scratch = t8;
+    // For testing purposes we need to fetch content of the FCSR register and
+    // than test its cc (floating point condition code) bit (for cc = 0, it is
+    // 24. bit of the FCSR).
+    cfc1(scratch, FCSR);
+    // For the MIPS I, II and III architectures, the contents of scratch is
+    // UNPREDICTABLE for the instruction immediately following CFC1.
+    nop();
+    srl(scratch, scratch, 16);
+    andi(scratch, scratch, 0x0080);
+    Branch(&done, ne, scratch, Operand(zero_reg));
+    mov(rd, rs);
+    bind(&done);
+  } else {
+    movf(rd, rs, cc);
+  }
+}
+
+
+void MacroAssembler::Clz(Register rd, Register rs) {
+  if (mips3) {
+    ASSERT(!(rd.is(t8) || rd.is(t9)) && !(rs.is(t8) || rs.is(t9)));
+    Register mask = t8;
+    Register scratch = t9;
+    Label loop, end;
+    mov(at, rs);
+    mov(rd, zero_reg);
+    lui(mask, 0x8000);
+    bind(&loop);
+    and_(scratch, at, mask);
+    Branch(&end, ne, scratch, Operand(zero_reg));
+    addiu(rd, rd, 1);
+    Branch(&loop, ne, mask, Operand(zero_reg), USE_DELAY_SLOT);
+    srl(mask, mask, 1);
+    bind(&end);
+  } else {
+    clz(rd, rs);
+ }
+}
+
+
 // Tries to get a signed int32 out of a double precision floating point heap
 // number. Rounds towards 0. Branch to 'not_int32' if the double is out of the
 // 32bits signed integer range.
@@ -1216,8 +1324,8 @@ void MacroAssembler::ConvertToInt32(Register source,
     subu(scratch2, zero_reg, scratch);
     // Trick to check sign bit (msb) held in dest, count leading zero.
     // 0 indicates negative, save negative version with conditional move.
-    clz(dest, dest);
-    movz(scratch, scratch2, dest);
+    Clz(dest, dest);
+    Movz(scratch, scratch2, dest);
     mov(dest, scratch);
   }
   bind(&done);
@@ -1284,7 +1392,7 @@ void MacroAssembler::EmitOutOfInt32RangeTruncate(Register result,
 
   // Check for Infinity and NaNs, which should return 0.
   Subu(scratch, result, HeapNumber::kExponentMask);
-  movz(result, zero_reg, scratch);
+  Movz(result, zero_reg, scratch);
   Branch(&done, eq, scratch, Operand(zero_reg));
 
   // Express exponent as delta to (number of mantissa bits + 31).
@@ -1348,7 +1456,7 @@ void MacroAssembler::EmitOutOfInt32RangeTruncate(Register result,
   result = sign;
   sign = no_reg;
   Subu(result, zero_reg, input_high);
-  movz(result, input_high, scratch);
+  Movz(result, input_high, scratch);
   bind(&done);
 }
 
