@@ -39,11 +39,16 @@
 
 #define UNSUPPORTED_MIPS() v8::internal::PrintF("Unsupported instruction.\n")
 
+enum arch_variants {mips32r2, mips32r1, mips3};
 
 #ifdef _MIPS_ARCH_MIPS32R2
-  #define mips32r2 1
+  static const arch_variants arch_variant = mips32r2;
+#elif _MIPS_ARCH_MIPS3
+// The mips3 flag refers to the MIPS-III architecture, which predates
+// (and is a subset of) the mips32r2 and r1 architectures.
+  static const arch_variants arch_variant = mips3;
 #else
-  #define mips32r2 0
+  static const arch_variants arch_variant = mips32r1;
 #endif
 
 
